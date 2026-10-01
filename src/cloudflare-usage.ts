@@ -5,7 +5,7 @@ export const CF_STOP = { workers: 90_000, rowsRead: 4_500_000, rowsWritten: 90_0
 const DAY = 86400_000;
 const CACHE_MS = 60_000;
 interface State { snapshot_json: string | null; refreshed_at: number; lease_until: number; last_error_code: string | null; }
-interface Snapshot { checkedAt: number; day: string; workers: number; rowsRead: number; rowsWritten: number; d1Bytes: number; databaseBytes: number; r2Bytes: number; }
+interface Snapshot { checkedAt: number; day: string; workers: number; rowsRead: number; rowsWritten: number; d1Bytes: number; databaseBytes: number; r2Bytes: number; storageBasis?: 'operator_verified_empty_account'; }
 interface Daily { day: string; workers: number; rows_read: number; rows_written: number; blocked: number; stop_code: string | null; }
 type Row = { sum?: Record<string, unknown>; max?: Record<string, unknown>; dimensions?: Record<string, unknown> };
 const classA = new Set(['ListBuckets', 'PutBucket', 'ListObjects', 'PutObject', 'CopyObject', 'CompleteMultipartUpload', 'CreateMultipartUpload', 'LifecycleStorageTierTransition', 'ListMultipartUploads', 'UploadPart', 'UploadPartCopy', 'ListParts', 'PutBucketEncryption', 'PutBucketCors', 'PutBucketLifecycleConfiguration']);
@@ -143,6 +143,7 @@ export async function cloudflareCapacity(env: Env) {
   }
   if (daily.blocked) code = daily.stop_code;
   return { enabled: true, allowed: !code, code, targetPercent: 90, measuredAt: new Date(data.checkedAt).toISOString(), meter: 'analytics_estimate_with_local_r2_reservations', limits: CF_STOP,
+    storageBasis: data.storageBasis === 'operator_verified_empty_account' ? data.storageBasis : 'account_analytics',
     usage: { workers: daily.workers, rowsRead: daily.rows_read, rowsWritten: daily.rows_written, d1Bytes: data.d1Bytes, databaseBytes: data.databaseBytes, r2A: r2.a, r2B: r2.b, r2PeakBytes: data.r2Bytes, reservedMediaBytes: reservedBytes }, dailyResetAt: new Date(Date.parse(data.day) + DAY).toISOString(), r2WindowDays: 31 };
 }
 

@@ -3,6 +3,7 @@ import { wrangler } from './wrangler.mjs';
 import { cloudflareApi } from './cloudflare-api.mjs';
 import { verifyDeployment } from './verify-deployment.mjs';
 import { deploymentAccount } from './cloudflare-auth.mjs';
+import { workerAddress } from './worker-address.mjs';
 
 try {
   const accountId = deploymentAccount();
@@ -34,9 +35,7 @@ try {
   config.vars.CLOUDFLARE_DATABASE_ID = db.uuid;
   const info = await cloudflareApi(accountId, `/d1/database/${db.uuid}`);
   if (info.name !== 'arabic-meme-autoposter-jobs') throw new Error('arabic_database_identity_mismatch');
-  const subdomain = (await cloudflareApi(accountId, '/workers/subdomain')).subdomain;
-  if (!/^[a-z0-9-]+$/.test(subdomain)) throw new Error('workers_subdomain_unverified');
-  config.vars.PUBLIC_BASE_URL = `https://arabic-meme-autoposter.${subdomain}.workers.dev`;
+  config.vars.PUBLIC_BASE_URL = await workerAddress(accountId);
   writeFileSync('wrangler.jsonc', JSON.stringify(config,null,2) + '\n');
   wrangler(['d1','migrations','apply','arabic-meme-autoposter-jobs','--remote']);
   wrangler(['deploy']);

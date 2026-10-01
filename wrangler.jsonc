@@ -14,7 +14,7 @@
     {
       "binding": "DB",
       "database_name": "arabic-meme-autoposter-jobs",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "2e47dbbf-e082-4579-9d34-c101c98ebb5b",
       "migrations_dir": "migrations"
     }
   ],
@@ -42,12 +42,12 @@
     "THIRD_PARTY_DOWNLOADER_PROVIDERS": "videodropper,fastdl,savefrom,snapinsta",
     "REPOST_PERMISSION_CONFIRMED": "true",
     "EXPECTED_INSTAGRAM_CHANNEL_ID": "6abea343ea19ca0bde46e40d",
-    "EXPECTED_TIKTOK_CHANNEL_ID": "6abea35cea19ca0bde46e52a",
+    "EXPECTED_TIKTOK_CHANNEL_ID": "6abebd37ea19ca0bde48a1b8",
     "EXPECTED_INSTAGRAM_USERNAME": "avexiro0",
-    "EXPECTED_TIKTOK_USERNAME": "samixr4",
+    "EXPECTED_TIKTOK_USERNAME": "avexiro0",
     "CLOUDFLARE_ACCOUNT_ID": "7d7578de8373f18cc730837758c40395",
-    "CLOUDFLARE_DATABASE_ID": "00000000-0000-0000-0000-000000000000",
-    "PUBLIC_BASE_URL": "https://arabic-meme-autoposter.invalid"
+    "CLOUDFLARE_DATABASE_ID": "2e47dbbf-e082-4579-9d34-c101c98ebb5b",
+    "PUBLIC_BASE_URL": "https://arabic-meme-autoposter.maikl-arabic-memes.workers.dev"
   },
   "account_id": "7d7578de8373f18cc730837758c40395"
 }

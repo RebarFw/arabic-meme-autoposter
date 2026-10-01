@@ -57,6 +57,20 @@ it('latches a daily stop, retains the high watermark, and resumes on the next ve
   expect((await cloudflareCapacity(bindings)).allowed).toBe(true);
 });
 
+it('keeps operator storage measurements within the same cache expiry and latched-stop rules', async () => {
+  const fetcher = mockUsage();
+  await cloudflareCapacity(bindings);
+  const row = await env.DB.prepare('SELECT snapshot_json FROM cloudflare_usage_state WHERE id=1').first<{ snapshot_json: string }>();
+  const snapshot = { ...JSON.parse(row!.snapshot_json), storageBasis: 'operator_verified_empty_account' };
+  await env.DB.prepare('UPDATE cloudflare_usage_state SET snapshot_json=? WHERE id=1').bind(JSON.stringify(snapshot)).run();
+  expect(await cloudflareCapacity(bindings)).toMatchObject({ allowed: true, storageBasis: 'operator_verified_empty_account' });
+  await env.DB.prepare("UPDATE cloudflare_usage_daily SET blocked=1,stop_code='cloudflare_d1_writes_daily_pause'").run();
+  expect(await cloudflareCapacity(bindings)).toMatchObject({ allowed: false, code: 'cloudflare_d1_writes_daily_pause' });
+  await env.DB.prepare('UPDATE cloudflare_usage_state SET refreshed_at=? WHERE id=1').bind(Date.now() - 60001).run();
+  fetcher.mockResolvedValue(Response.json({ errors: [{ message: 'analytics unavailable' }] }));
+  await expect(cloudflareCapacity(bindings)).rejects.toThrow('cloudflare_usage_api_error');
+});
+
 it('pauses for each daily D1 meter with room for operations already in progress', async () => {
   for (const options of [{ writes: CF_STOP.rowsWritten - 50 }, { reads: CF_STOP.rowsRead - 500 }]) {
     mockUsage(options);

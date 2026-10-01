@@ -28,6 +28,7 @@
     "apify:budget": "node scripts/admin.mjs apify:budget",
     "cloudflare:usage": "node scripts/admin.mjs cloudflare:usage",
     "cloudflare:validate": "node scripts/admin.mjs cloudflare:validate",
+    "cloudflare:bootstrap": "node scripts/bootstrap-cloudflare-usage.mjs",
     "cloudflare:probe": "node scripts/admin.mjs cloudflare:probe",
     "apify:enforce-limit": "node scripts/admin.mjs apify:enforce-limit",
     "retry:download": "node scripts/retry-download.mjs",
