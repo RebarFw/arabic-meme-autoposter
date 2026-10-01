@@ -21,6 +21,8 @@ The Meta app remains unpublished. Webhook signature validation and GET verificat
 
 ### Two-person authorization
 
+`@avexiro0` is the only connected Instagram account, DM receiver and Instagram posting destination; TikTok posting also targets `@avexiro0`. `@rebarfw` and Michel karkoush are DM senders only. If Meta tester authorization is needed while the app is unpublished, it is limited to exposing those senders' DMs. Sender enrollment never adds a Buffer channel or connects a sender as a posting account.
+
 Only `OWNER_IG_SENDER_ID` and `FRIEND_IG_SENDER_ID` are allowed. **Publishing stays closed until both are installed and distinct.** Usernames and display names never authorize publishing.
 
 The administrator issues a separate random, 15-minute DM challenge for each slot. `@rebarfw` sends the owner challenge; the friend identified as Michel karkoush sends the friend challenge from his own Instagram account. Only a signed Meta notification or authenticated Meta message read supplies the real sender ID. The importer requires the active challenge hash, a recent message and the correct recipient. An optional username adds a selection check; it cannot replace the DM proof. A self-chosen challenge, expired/replaced challenge, duplicate person or third slot is rejected.

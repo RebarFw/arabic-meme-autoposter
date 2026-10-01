@@ -2,6 +2,8 @@
 
 Use the `Arabic Meme Autoposter` Meta app and Instagram Login for the professional account `@avexiro0`. Keep the app in Development. This project does not publish the app or submit App Review.
 
+The user confirmed that `@avexiro0` alone is the connected Instagram account, DM receiver and Instagram posting destination, with TikTok also targeting `@avexiro0`. `@rebarfw` and Michel karkoush are approved DM senders only after separate ID proofs. Any Meta tester authorization for them must serve only Development-mode DM visibility; it does not authorize connecting their accounts, adding Buffer channels, generating sender-account tokens or granting publishing access. Keep the receiver's existing credentials and destinations pinned while checking accepted tester invitations.
+
 1. In the app's **Manage messaging & content on Instagram** use case, add/authorize `@avexiro0` as the Instagram professional account/tester if it is not already connected. Accept any Instagram tester invitation from that account. Authentication and permission prompts require the account holder.
 2. Generate the Instagram **User** access token with `instagram_business_basic` and `instagram_business_manage_messages`. Save it in the ignored `.secrets/meta-access-token.txt`. Save the associated Instagram app secret in `.secrets/meta-app-secret.txt`. These files must contain just the credential; do not paste credentials into chat.
 3. `npm run secrets:install` securely uploads the files. `npm run meta:diagnose` verifies profile and conversation access. `npm run setup` verifies Meta and Buffer refer to the same Instagram account and subscribes `messages` while leaving the app unpublished. The confirmed Buffer destinations are Instagram @avexiro0 and TikTok @avexiro0.
