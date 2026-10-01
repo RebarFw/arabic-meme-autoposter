@@ -2,11 +2,10 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { wrangler } from './wrangler.mjs';
 import { cloudflareApi } from './cloudflare-api.mjs';
 import { verifyDeployment } from './verify-deployment.mjs';
+import { deploymentAccount } from './cloudflare-auth.mjs';
 
 try {
-  const auth = JSON.parse(wrangler(['whoami', '--json'], { capture: true }));
-  if (!auth.loggedIn || auth.accounts?.length !== 1) throw new Error('one_authenticated_cloudflare_account_required');
-  const accountId = auth.accounts[0].id;
+  const accountId = deploymentAccount();
   const config = JSON.parse(readFileSync('wrangler.jsonc','utf8'));
   if (config.account_id && config.account_id !== accountId) throw new Error('cloudflare_account_changed');
   config.account_id = accountId;

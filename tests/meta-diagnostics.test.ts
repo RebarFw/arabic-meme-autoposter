@@ -14,6 +14,35 @@ async function call(path: string, method = 'GET', authorized = true, config = bi
 }
 afterEach(() => vi.restoreAllMocks());
 
+it('keeps authenticated Meta recovery reads available while a broken analytics reader blocks setup mutations', async () => {
+  const guarded = { ...bindings, CLOUDFLARE_USAGE_GUARD: 'true', CLOUDFLARE_USAGE_TOKEN: 'fake-cloudflare-reader' };
+  const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+    if (String(input).startsWith('https://api.cloudflare.com/')) return Response.json({ errors: [{ message: 'not authorized for account' }] });
+    expect(new URL(String(input)).origin).toBe('https://graph.instagram.com');
+    expect(init?.method).not.toBe('POST');
+    if (String(input).includes('/me?')) return Response.json({ id: '456', user_id: '123', username: 'memepage' });
+    return Response.json({ data: [] });
+  });
+  expect((await call('/admin/meta/diagnose', 'GET', false, guarded)).status).toBe(401);
+  expect(fetcher).not.toHaveBeenCalled();
+  expect((await call('/admin/meta/diagnose', 'GET', true, guarded)).status).toBe(200);
+  expect(fetcher).toHaveBeenCalledTimes(3);
+  for (const path of ['/admin/setup', '/admin/meta/subscribe', '/admin/owner/start', '/admin/owner/finish']) {
+    const response = await call(path, 'POST', true, guarded);
+    expect(response.status).toBe(503);
+    expect(await response.text()).toContain('cloudflare_usage_api_error');
+  }
+  expect(fetcher.mock.calls.filter(([input]) => String(input).startsWith('https://graph.instagram.com/'))).toHaveLength(3);
+});
+
+it('redacts both approved sender IDs and the analytics reader from echoed provider errors', async () => {
+  const guardedSecrets = { ...bindings, OWNER_IG_SENDER_ID: '10101010101010', FRIEND_IG_SENDER_ID: '20202020202020', CLOUDFLARE_USAGE_TOKEN: 'fake-analytics-reader-secret' };
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ error: { code: 190, message: `${guardedSecrets.OWNER_IG_SENDER_ID} ${guardedSecrets.FRIEND_IG_SENDER_ID} ${guardedSecrets.CLOUDFLARE_USAGE_TOKEN}` } }, { status: 401 }));
+  const text = await (await call('/admin/meta/diagnose', 'GET', true, guardedSecrets)).text();
+  expect(text).toContain('"code":190');
+  for (const secret of [guardedSecrets.OWNER_IG_SENDER_ID, guardedSecrets.FRIEND_IG_SENDER_ID, guardedSecrets.CLOUDFLARE_USAGE_TOKEN]) expect(text).not.toContain(secret);
+});
+
 it('protects Meta diagnostics and subscription mutations before any external requests', async () => {
   const fetcher = vi.spyOn(globalThis, 'fetch');
   expect((await call('/admin/meta/diagnose', 'GET', false)).status).toBe(401);

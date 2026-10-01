@@ -7,7 +7,7 @@
     "dev": "wrangler dev --test-scheduled",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "node --test tests/deployment-auth.test.mjs && vitest run",
     "check": "npm run lint && npm run typecheck && npm test",
     "db:local": "wrangler d1 migrations apply arabic-meme-autoposter-jobs --local",
     "deploy": "node scripts/deploy.mjs",
@@ -35,7 +35,7 @@
     "posts:refresh": "node scripts/refresh-posts.mjs",
     "meta:diagnose": "node scripts/admin.mjs meta:diagnose",
     "meta:subscribe": "node scripts/admin.mjs meta:subscribe",
-    "db:remote": "wrangler d1 migrations apply arabic-meme-autoposter-jobs --remote",
+    "db:remote": "node scripts/wrangler.mjs d1 migrations apply arabic-meme-autoposter-jobs --remote",
     "secrets:install": "node scripts/install-secrets.mjs",
     "secrets:check": "node scripts/check-secrets.mjs"
   },

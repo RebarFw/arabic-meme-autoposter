@@ -26,6 +26,9 @@ async function admin(request: Request, env: Env, path: string): Promise<Response
     catch (error) { if (error instanceof CloudflareUsageError) return json({ error: error.code, facts: error.facts }, 503); throw error; }
   }
   if (path === '/admin/cloudflare/probe' && request.method === 'POST') return json(await probeCloudflareGuard(env));
+  // Operator recovery reads only Meta; it does not use D1, R2 or publishing.
+  // Keep this diagnostic available when the analytics reader needs repair.
+  if (path === '/admin/meta/diagnose' && request.method === 'GET') return json(await diagnoseMeta(env));
   if (!['/admin/status', '/admin/apify/budget', '/admin/owner/status'].includes(path)) await requireCloudflareCapacity(env);
   if (path === '/admin/owner/start' && request.method === 'POST') return json(await startOwnerSetup(env, slot));
   if (path === '/admin/owner/import' && request.method === 'POST') return json(await importOwnerSetup(env, JSON.parse(new TextDecoder().decode(await limitedBytes(request.body, 2048))), slot));
@@ -60,7 +63,6 @@ async function admin(request: Request, env: Env, path: string): Promise<Response
   if (path === '/admin/download/probe-apify' && request.method === 'POST') return json(await probeApifyDownload(env));
   if (path === '/admin/apify/budget' && request.method === 'GET') return json(await apifyBudgetStatus(env));
   if (path === '/admin/apify/enforce-limit' && request.method === 'POST') return json(await apifyBudgetStatus(env, true));
-  if (path === '/admin/meta/diagnose' && request.method === 'GET') return json(await diagnoseMeta(env));
   if (path === '/admin/meta/subscribe' && request.method === 'POST') return json(await diagnoseMeta(env, true));
   if (path === '/admin/setup' && request.method === 'POST') {
     const channels = await new BufferClient(env).discoverChannels();

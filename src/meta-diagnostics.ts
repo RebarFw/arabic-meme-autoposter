@@ -12,7 +12,7 @@ const permissionName = (value: unknown): string | undefined => typeof value === 
 function safeText(env: Env, value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   let text = value;
-  for (const secret of [env.META_ACCESS_TOKEN, env.META_APP_SECRET, env.ADMIN_TOKEN, env.BUFFER_API_KEY, env.META_VERIFY_TOKEN, env.OWNER_IG_SENDER_ID, env.DOWNLOADER_API_KEY]) {
+  for (const secret of [env.META_ACCESS_TOKEN, env.META_APP_SECRET, env.ADMIN_TOKEN, env.BUFFER_API_KEY, env.META_VERIFY_TOKEN, env.OWNER_IG_SENDER_ID, env.FRIEND_IG_SENDER_ID, env.DOWNLOADER_API_KEY, env.CLOUDFLARE_USAGE_TOKEN]) {
     if (secret) {
       const normalized = secret.trim().replace(/^(["'])([A-Za-z0-9_-]+)\1$/, '$2');
       for (const value of [secret, normalized]) if (value) text = text.split(value).join('[redacted]').split(encodeURIComponent(value)).join('[redacted]');

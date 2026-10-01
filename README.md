@@ -9,7 +9,7 @@ Private Arabic meme automation adapted from [RebarFw/meme-autoposter](https://gi
 - Worker: `arabic-meme-autoposter`.
 - Private R2: `arabic-meme-autoposter-media`, Standard storage, two-day lifecycle rule.
 - D1: `arabic-meme-autoposter-jobs`.
-- Cloudflare uses the currently authenticated account. Account IDs and URLs are in `wrangler.jsonc`; credentials are Worker secrets.
+- Cloudflare account: `maiklkarkoch51@gmail.com`, ID `7d7578de8373f18cc730837758c40395`. Deployment uses only this project's local token and pinned account; it never falls back to the global Wrangler login. Account IDs and URLs are in `wrangler.jsonc`; runtime credentials are Worker secrets.
 
 The Buffer API key exposes exactly this connected pair. Both IDs and usernames are pinned; ambiguous, incorrect, disconnected, locked or reminder-only channels fail closed. Before submitting each job, channel discovery rechecks the pair.
 
@@ -69,8 +69,8 @@ npm run cloudflare:validate
 npm run apify:budget
 ```
 
-The `.secrets/` filenames are `buffer-api-key.txt`, `apify-token.txt`, `cloudflare-usage-token.txt`, `meta-access-token.txt`, and `meta-app-secret.txt`. Deployment creates project-specific `admin-token` and `meta-verify-token`. The installer uploads only nonempty files through Wrangler stdin and prints names only. Leave the local operator tokens available for diagnostics and Meta verification; remove source credentials only after secure installation is confirmed and recovery is assured.
+The `.secrets/` filenames are `buffer-api-key.txt`, `apify-token.txt`, `cloudflare-usage-token.txt`, `meta-access-token.txt`, and `meta-app-secret.txt`. A separate local `cloudflare-deploy-token.txt` can grant Workers Scripts Edit, Workers R2 Storage Edit, D1 Edit and Account Settings Read for the pinned account. This deployment credential is never uploaded to the Worker; its runtime analytics reader remains separate. Deployment creates project-specific `admin-token` and `meta-verify-token`. The installer uploads only nonempty runtime secret files through Wrangler stdin and prints names only. Leave the local operator tokens available for diagnostics and Meta verification; remove source credentials only after secure installation is confirmed and recovery is assured.
 
-Deployment checks resource names, selects the single authenticated account, creates/reuses only the Arabic resources, rejects public R2 domains, installs lifecycle expiry, applies migrations, deploys and verifies the actual URL. It never reads the English project's credentials. GitHub Actions repeats lint, typechecking, Worker-runtime tests and a dry build without production secrets.
+Deployment checks resource names and the explicitly confirmed Arabic account, creates/reuses only the Arabic resources, rejects public R2 domains, installs lifecycle expiry, applies migrations, deploys and verifies the actual URL. It never reads the English project's credentials. GitHub Actions repeats lint, typechecking, deployment authentication tests, Worker-runtime tests and a dry build without production secrets.
 
 Current installation and real-test evidence: [testing](docs/testing.md). External Meta steps: [deployment](docs/deployment.md).

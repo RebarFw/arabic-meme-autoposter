@@ -1,12 +1,9 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { deploymentAccount, deploymentToken } from './cloudflare-auth.mjs';
 
-// Use the operator's existing Wrangler login; never persist or display its token.
+// Use only this project's local token and explicitly confirmed account.
 export async function cloudflareApi(accountId, suffix, init = {}) {
-  if (!/^[a-f0-9]{32}$/.test(accountId)) throw new Error('invalid_cloudflare_account');
-  const source = readFileSync(join(process.env.APPDATA, 'xdg.config', '.wrangler', 'config', 'default.toml'), 'utf8');
-  const token = source.match(/^oauth_token\s*=\s*"([^"]+)"/m)?.[1];
-  if (!token) throw new Error('cloudflare_browser_login_required');
+  if (accountId !== deploymentAccount()) throw new Error('cloudflare_account_mismatch');
+  const token = deploymentToken();
   const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}${suffix}`, {
     ...init, redirect: 'error', signal: AbortSignal.timeout(20000),
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
