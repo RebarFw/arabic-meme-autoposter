@@ -1,0 +1,53 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "arabic-meme-autoposter",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": true,
+  "r2_buckets": [
+    {
+      "binding": "MEDIA",
+      "bucket_name": "arabic-meme-autoposter-media"
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "arabic-meme-autoposter-jobs",
+      "database_id": "5b77caff-6b03-47d8-a41f-fa7cbc8fa676",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "* * * * *"
+    ]
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": {
+      "invocation_logs": false
+    }
+  },
+  "vars": {
+    "CLOUDFLARE_USAGE_GUARD": "true",
+    "INGEST_MODE": "polling",
+    "DOWNLOADER_PROVIDER": "apify",
+    "META_API_VERSION": "v26.0",
+    "MAX_VIDEO_BYTES": "26214400",
+    "MEDIA_TTL_SECONDS": "86400",
+    "ENABLE_OWNER_DM": "false",
+    "ALLOW_PUBLIC_PAGE_DOWNLOADER": "true",
+    "THIRD_PARTY_DOWNLOADER_PROVIDERS": "videodropper,fastdl,savefrom,snapinsta",
+    "REPOST_PERMISSION_CONFIRMED": "true",
+    "EXPECTED_INSTAGRAM_CHANNEL_ID": "6abea343ea19ca0bde46e40d",
+    "EXPECTED_TIKTOK_CHANNEL_ID": "6abea35cea19ca0bde46e52a",
+    "EXPECTED_INSTAGRAM_USERNAME": "avexiro0",
+    "EXPECTED_TIKTOK_USERNAME": "samixr4",
+    "CLOUDFLARE_ACCOUNT_ID": "97d19512e831722d5d48aa2d05086716",
+    "CLOUDFLARE_DATABASE_ID": "5b77caff-6b03-47d8-a41f-fa7cbc8fa676",
+    "PUBLIC_BASE_URL": "https://arabic-meme-autoposter.meme-autoposter.workers.dev"
+  },
+  "account_id": "97d19512e831722d5d48aa2d05086716"
+}
