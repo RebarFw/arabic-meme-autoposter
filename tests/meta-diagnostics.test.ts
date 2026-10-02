@@ -129,16 +129,32 @@ it('creates and reads back the subscription while preserving existing fields and
 it('verifies basic and messaging access through documented API calls without exposing conversation IDs or claiming a scopes list', async () => {
   vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
     if (String(input).includes('/me?')) return Response.json({ id: '456', user_id: '123', username: 'memepage' });
-    if (String(input).includes('/me/conversations?')) return Response.json({ data: [{ id: 'private-conversation-id' }] });
+    if (String(input).includes('/me/conversations?')) return Response.json({ data: [{ id: 'private-conversation-id' }], paging: { next: 'https://graph.instagram.com/v26.0/me/conversations?after=private-pagination-value' } });
     return Response.json({ data: [{ id: '987', subscribed_fields: ['messages'] }] });
   });
   const response = await call('/admin/meta/diagnose');
   const text = await response.text();
-  const body = JSON.parse(text) as { permissions: { required: Record<string, string>; scopesEnumerated: boolean; messaging: { httpStatus: number } } };
+  const body = JSON.parse(text) as { permissions: { required: Record<string, string>; scopesEnumerated: boolean; messaging: { httpStatus: number } }; conversationAccess: { state: string; hasNextPage: boolean } };
   expect(body.permissions.required).toEqual({ instagram_business_basic: 'verified_by_api', instagram_business_manage_messages: 'verified_by_api' });
   expect(body.permissions.scopesEnumerated).toBe(false);
   expect(body.permissions.messaging.httpStatus).toBe(200);
+  expect(body.conversationAccess).toMatchObject({ state: 'available', hasNextPage: true });
   expect(text).not.toContain('private-conversation-id');
+  expect(text).not.toContain('private-pagination-value');
+});
+
+it('distinguishes an authorized empty response from visible DMs without inventing sender-role or App Review requirements', async () => {
+  const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+    expect(init?.method).not.toBe('POST');
+    if (String(input).includes('/me?')) return Response.json({ id: '456', user_id: '123', username: 'memepage' });
+    return Response.json({ data: [], paging: { next: '' } });
+  });
+  const response = await call('/admin/meta/diagnose');
+  const body = await response.json() as { permissions: { required: Record<string, string> }; conversationAccess: { requestAuthorized: boolean; state: string; sampledConversations: number; hasNextPage: boolean }; appReview: string };
+  expect(body.permissions.required).toEqual({ instagram_business_basic: 'verified_by_api', instagram_business_manage_messages: 'request_authorized' });
+  expect(body.conversationAccess).toEqual({ requestAuthorized: true, state: 'empty', sampledConversations: 0, hasNextPage: false });
+  expect(body.appReview).toContain('does not establish App Review or sender-role requirements');
+  expect(fetcher).toHaveBeenCalledTimes(3);
 });
 
 it('keeps Meta error codes and trace IDs but redacts echoed secrets and never logs raw API errors', async () => {

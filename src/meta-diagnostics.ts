@@ -92,9 +92,17 @@ export async function diagnoseMeta(env: Env, subscribe = false) {
   const me = Array.isArray(profile.body.data) ? object(profile.body.data[0]) : profile.body;
   const accountId = identifier(me.user_id) ?? identifier(me.id);
   const messagingAuthorized = messaging.ok && Array.isArray(messaging.body.data);
+  const sampledConversations = messagingAuthorized ? Math.min((messaging.body.data as unknown[]).length, 1) : 0;
+  const nextPage = object(messaging.body.paging).next;
+  const conversationAccess = {
+    requestAuthorized: messagingAuthorized,
+    state: !messagingAuthorized ? 'unavailable' : sampledConversations ? 'available' : 'empty',
+    sampledConversations,
+    hasNextPage: messagingAuthorized && typeof nextPage === 'string' && nextPage.trim().length > 0,
+  };
   const required = {
     instagram_business_basic: (profile.ok && accountId) || messagingAuthorized ? 'verified_by_api' : 'unknown',
-    instagram_business_manage_messages: messagingAuthorized ? 'verified_by_api' : 'unknown',
+    instagram_business_manage_messages: messagingAuthorized ? sampledConversations ? 'verified_by_api' : 'request_authorized' : 'unknown',
   };
   const before = accountId ? await inspect(env, `${accountId}/subscribed_apps`) : undefined;
   let creation: ApiResult | undefined;
@@ -113,12 +121,13 @@ export async function diagnoseMeta(env: Env, subscribe = false) {
     apiHost: 'graph.instagram.com', apiVersion: env.META_API_VERSION,
     appSecretFormatting: { configured: !!env.META_APP_SECRET, rawLength: env.META_APP_SECRET?.length ?? 0, normalizedLength: normalizeMetaAppSecret(env.META_APP_SECRET ?? '').length, isHex32: /^[a-f0-9]{32}$/i.test(normalizeMetaAppSecret(env.META_APP_SECRET ?? '')) },
     account: { ...evidence(profile), id: accountId, appScopedId: identifier(me.id), username: safeText(env, me.username) },
-    permissions: { required, scopesEnumerated: false, basis: 'Authorization of profile and Conversations API reads; scope strings are not enumerated.', messaging: evidence(messaging) },
+    permissions: { required, scopesEnumerated: false, basis: 'Profile and Conversations API request evidence; an empty response does not verify DM visibility. Scope strings are not enumerated.', messaging: evidence(messaging) },
+    conversationAccess,
     subscriptionBefore: before ? { ...evidence(before), apps: applications(env, before) } : undefined,
     subscriptionCreate: creation ? { ...evidence(creation), success: created } : undefined,
     subscriptionAfter: after ? { ...evidence(after), apps: applications(env, after) } : undefined,
     appMode: 'Not read from this Instagram user token; no app mode was changed.',
-    appReview: profile.ok && messagingAuthorized ? 'Not blocking the tested profile and messaging API reads. Webhook delivery still needs a separate test.' : created ? 'Not blocking this account subscription request. Webhook delivery still needs a separate test.' : 'No App Review or live-mode conclusion without supporting Meta API evidence.',
+    appReview: profile.ok && messagingAuthorized ? sampledConversations ? 'The tested API requests succeeded and returned conversation data. Real message access, webhook delivery and app mode require separate evidence.' : 'The Conversations API request succeeded but returned no conversations. An empty result does not establish App Review or sender-role requirements.' : created ? 'Not blocking this account subscription request. Webhook delivery still needs a separate test.' : 'No App Review or live-mode conclusion without supporting Meta API evidence.',
     webhook: `${env.PUBLIC_BASE_URL}/webhooks/instagram`,
   };
 }
