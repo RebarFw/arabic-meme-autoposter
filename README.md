@@ -19,6 +19,8 @@ An approved person shares a Reel in a separate 1-to-1 Instagram DM to the meme a
 
 The Meta app remains unpublished. Webhook signature validation and GET verification are retained, but only polling ingests publishing jobs in this configuration. No App Review, publication or group chat integration is performed.
 
+Live DM visibility is still unresolved. Dashboard inspection on October 2, 2026 confirmed that the working English app is Published, while Arabic is Unpublished; the Arabic receiver's credentials and messaging grant match its dashboard. Any publication requires the user's explicit approval. Two-sender enrollment and real social posting remain unverified; see [installation evidence](docs/testing.md).
+
 ### Two-person authorization
 
 `@avexiro0` is the only connected Instagram account, DM receiver and Instagram posting destination; TikTok posting also targets `@avexiro0`. `@rebarfw` and Michel karkoush are DM senders only. If Meta tester authorization is needed while the app is unpublished, it is limited to exposing those senders' DMs. Sender enrollment never adds a Buffer channel or connects a sender as a posting account.
