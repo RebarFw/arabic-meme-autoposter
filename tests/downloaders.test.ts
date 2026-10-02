@@ -13,9 +13,11 @@ beforeEach(async () => { await env.DB.batch([env.DB.prepare("DELETE FROM setting
 
 it('uses official Graph metadata for ambiguous current post shares and requires a Reel', async () => {
   const fetcher = vi.spyOn(globalThis,'fetch').mockImplementation(async input => String(input).includes('graph.instagram.com')
-    ? Response.json({media_type:'VIDEO',media_product_type:'REELS',media_url:'https://scontent.cdninstagram.com/clip.mp4'}) : video());
+    ? Response.json({media_type:'VIDEO',media_product_type:'REELS',media_url:'https://scontent.cdninstagram.com/clip.mp4',caption:'original @creator\n#same'}) : video());
   const result = await new MetaGraphDownloader().download(source,bindings);
   expect(result.provider).toBe('meta-graph');
+  expect(result.caption).toBe('original @creator\n#same');
+  expect(new URL(String(fetcher.mock.calls[0]![0])).searchParams.get('fields')).toContain('caption');
   expect(fetcher).toHaveBeenCalledTimes(2);
   fetcher.mockResolvedValue(Response.json({media_type:'IMAGE',media_product_type:'FEED',media_url:'https://scontent.cdninstagram.com/image.jpg'}));
   await expect(new MetaGraphDownloader().download(source,bindings)).rejects.toThrow('meta_media_not_reel');
@@ -33,12 +35,12 @@ it('optional API uses its explicit adapter contract and requires Reel evidence f
     if(String(input).includes('api.downloader.example')) {
       expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer fake-optional-key');
       expect(JSON.parse(String(init?.body)).mediaId).toBe('123');
-      return Response.json({videoUrl:'https://scontent.cdninstagram.com/clip.mp4',isReel:true});
+      return Response.json({videoUrl:'https://scontent.cdninstagram.com/clip.mp4',isReel:true,caption:'adapter @original #same'});
     }
     return video();
   });
   const optional = {...bindings,DOWNLOADER_API_URL:'https://api.downloader.example/resolve',DOWNLOADER_API_KEY:'fake-optional-key'};
-  expect((await new ApiVideoDownloader().download(source,optional)).provider).toBe('optional-downloader-api');
+  expect(await new ApiVideoDownloader().download(source,optional)).toMatchObject({provider:'optional-downloader-api',caption:'adapter @original #same'});
   fetcher.mockResolvedValue(Response.json({videoUrl:'https://scontent.cdninstagram.com/clip.mp4',isReel:false}));
   await expect(new ApiVideoDownloader().download(source,optional)).rejects.toThrow('not_reel');
 });
@@ -53,7 +55,7 @@ it('rejects thumbnail MIME and backs off transient download network failures', a
 
 const apifyBindings: Env = { ...bindings, DOWNLOADER_PROVIDER: 'apify', DOWNLOADER_API_KEY: 'fake-apify-api-key' };
 const apifySource: ReelSource = { ...source, kind: 'reel', reelUrl: 'https://www.instagram.com/reel/ABCdef123/' };
-const apifyItem = { shortCode: 'ABCdef123', type: 'Video', productType: 'clips', videoUrl: 'https://scontent.cdninstagram.com/clip.mp4' };
+const apifyItem = { shortCode: 'ABCdef123', type: 'Video', productType: 'clips', videoUrl: 'https://scontent.cdninstagram.com/clip.mp4', caption: 'Original @creator\n\n#Same #نفسه' };
 
 it('uses the real Apify Actor contract, caps costs and keeps the key away from media URLs and requests', async () => {
   const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
@@ -64,6 +66,7 @@ it('uses the real Apify Actor contract, caps costs and keeps the key away from m
       expect(url.searchParams.get('maxTotalChargeUsd')).toBe('0.0073');
       expect(url.searchParams.get('maxItems')).toBe('1');
       expect(url.searchParams.get('limit')).toBe('1');
+      expect(url.searchParams.get('fields')).toBe('shortCode,type,productType,videoUrl,caption');
       expect(url.searchParams.has('token')).toBe(false);
       expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer fake-apify-api-key');
       expect(JSON.parse(String(init?.body))).toEqual({ username: [apifySource.reelUrl], resultsLimit: 1, includeSharesCount: false, includeTranscript: false, includeDownloadedVideo: false });
@@ -72,8 +75,33 @@ it('uses the real Apify Actor contract, caps costs and keeps the key away from m
     expect(new Headers(init?.headers).has('Authorization')).toBe(false);
     return video();
   });
-  expect((await new ApifyVideoDownloader().download(apifySource, apifyBindings)).provider).toBe('apify-instagram-reel');
+  expect(await new ApifyVideoDownloader().download(apifySource, apifyBindings)).toMatchObject({provider:'apify-instagram-reel',caption:apifyItem.caption});
   expect(fetcher).toHaveBeenCalledTimes(5);
+});
+
+it('falls through a captionless MP4 to fetch the matching original caption in one guarded Apify run', async () => {
+  const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+    const guard = apifyGuardResponse(input); if (guard) return guard;
+    if (String(input).includes('/actors/')) return Response.json([apifyItem]);
+    return video();
+  });
+  const result = await downloadVideo({ ...apifySource, mediaId: undefined, attachmentUrl: 'https://lookaside.fbsbx.com/clip.mp4' }, { ...apifyBindings, ALLOW_PUBLIC_PAGE_DOWNLOADER: 'false' }, 'job', undefined, true);
+  expect(result.caption).toBe(apifyItem.caption);
+  expect(result.provider).toBe('apify-instagram-reel');
+  expect(fetcher.mock.calls.filter(([input]) => String(input).includes('/actors/'))).toHaveLength(1);
+});
+
+it.each([undefined, null, 123])('does not invent a caption when Apify returns %j', async caption => {
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async input => apifyGuardResponse(input) ?? (String(input).includes('/actors/') ? Response.json([{ ...apifyItem, caption }]) : video()));
+  await expect(downloadVideo({ ...apifySource, mediaId: undefined }, { ...apifyBindings, ALLOW_PUBLIC_PAGE_DOWNLOADER: 'false' }, 'job', undefined, true)).rejects.toMatchObject({ code: 'source_caption_unavailable', retryable: true });
+});
+
+it('prefers an explicitly empty provider caption to a share title and never copies an Open Graph description', async () => {
+  const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async input => apifyGuardResponse(input) ?? (String(input).includes('/actors/') ? Response.json([{ ...apifyItem, caption: '' }]) : video()));
+  const result = await downloadVideo({ ...apifySource, title: 'fallback title', mediaId: undefined }, { ...apifyBindings, ALLOW_PUBLIC_PAGE_DOWNLOADER: 'false' }, 'job', undefined, true);
+  expect(result.caption).toBe('');
+  fetcher.mockImplementation(async input => String(input).includes('instagram.com/reel/') ? new Response('<meta property="og:description" content="123 likes - creator on Instagram: &quot;truncated title…&quot;"><meta property="og:video" content="https://scontent.cdninstagram.com/clip.mp4">') : video());
+  await expect(downloadVideo({ ...apifySource, mediaId: undefined }, bindings, 'job', undefined, true)).rejects.toThrow('source_caption_unavailable');
 });
 
 it('cannot use Apify without its optional key and selected provider', async () => {

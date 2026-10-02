@@ -1,6 +1,6 @@
 import { BufferClient, definiteBufferRejection } from './buffer';
 import { senderAllowed } from './senders';
-import { createCaption } from './caption';
+import { withoutMentions } from './caption';
 import { cloudflareCapacity, requireCloudflareCapacity } from './cloudflare-usage';
 import { downloadVideo } from './downloaders';
 import { notifyOwner } from './meta';
@@ -133,16 +133,19 @@ async function download(env: Env, job: Job): Promise<void> {
   if (!channels || channels.length !== 2) throw new AppError('channels_not_configured', true);
   const source: ReelSource = JSON.parse(job.source_json);
   if (!senderAllowed(env, source.senderId)) throw new AppError('sender_not_authorized');
-  const caption = job.caption ?? await createCaption(job.id);
   const key = `arabic-meme-autoposter/${job.id}.mp4`;
   const token = crypto.randomUUID().replaceAll('-','') + crypto.randomUUID().replaceAll('-','');
   const ttl = Math.min(Math.max(Number(env.MEDIA_TTL_SECONDS) || 86400, 3600), 172800);
   const expires = Date.now() + ttl * 1000;
   // Persist cleanup info before upload; a killed invocation cannot leave an untracked object.
-  const prepared = await env.DB.prepare('UPDATE jobs SET object_key=?, media_token=?, media_expires_at=?, caption=?, attempts=attempts+1 WHERE id=? AND lease_token=?')
-    .bind(key, token, expires, caption, job.id, job.lease_token).run();
+  const prepared = await env.DB.prepare('UPDATE jobs SET object_key=?, media_token=?, media_expires_at=?, caption=NULL, attempts=attempts+1 WHERE id=? AND lease_token=?')
+    .bind(key, token, expires, job.id, job.lease_token).run();
   if (!prepared.meta.changes) return;
-  const video = await downloadVideo(source, env, job.id);
+  const video = await downloadVideo(source, env, job.id, undefined, true);
+  if (typeof video.caption !== 'string') { await video.response.body?.cancel(); throw new AppError('source_caption_unavailable', true); }
+  const saved = await env.DB.prepare('UPDATE jobs SET caption=? WHERE id=? AND lease_token=?')
+    .bind(withoutMentions(video.caption), job.id, job.lease_token).run();
+  if (!saved.meta.changes) { await video.response.body?.cancel(); return; }
   const bytes = await storeVideo(env, video.response, key, expires);
   await env.DB.batch(channels.map(c => env.DB.prepare('INSERT OR IGNORE INTO deliveries(job_id, service, channel_id, updated_at) VALUES (?,?,?,?)').bind(job.id, c.service, c.id, Date.now())));
   log('media_stored', { job: job.id, provider: video.provider, bytes });
@@ -154,6 +157,8 @@ async function deliveries(env: Env, id: string): Promise<Delivery[]> {
 }
 
 async function publish(env: Env, job: Job): Promise<void> {
+  if (job.caption === null) throw new AppError('source_caption_unavailable');
+  const caption = withoutMentions(job.caption);
   if (!job.object_key || !job.media_expires_at || job.media_expires_at <= Date.now() || !await env.MEDIA.head(job.object_key)) throw new AppError('media_missing_or_expired');
   const client = new BufferClient(env);
   if (env.EXPECTED_INSTAGRAM_CHANNEL_ID || env.EXPECTED_TIKTOK_CHANNEL_ID) await client.discoverChannels();
@@ -165,7 +170,7 @@ async function publish(env: Env, job: Job): Promise<void> {
       .bind(Date.now(), job.id, delivery.service, job.id, job.lease_token, Date.now()).run();
     if (!reserved.meta.changes) continue;
     try {
-      const post = await client.publish(delivery.channel_id, delivery.service, job.caption!, temporaryMediaUrl(env, job));
+      const post = await client.publish(delivery.channel_id, delivery.service, caption, temporaryMediaUrl(env, job));
       const state = post.schedulingType !== 'automatic' || !['scheduled','sending','sent'].includes(post.status) ? 'failed' : 'accepted';
       await env.DB.prepare('UPDATE deliveries SET state=?, post_id=?, post_status=?, error_code=?, updated_at=? WHERE job_id=? AND service=?')
         .bind(state, post.id, post.status, state === 'failed' ? 'buffer_not_automatic' : null, Date.now(), job.id, delivery.service).run();

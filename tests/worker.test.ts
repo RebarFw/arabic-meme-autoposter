@@ -16,10 +16,10 @@ const channels: Channel[] = [
   { id: 'tt-channel', service: 'tiktok', name: 'memes', serviceId: '333', organizationId: 'org', isLocked: false, isDisconnected: false },
 ];
 const mp4 = new Uint8Array([0,0,0,24,102,116,121,112,105,115,111,109,0,0,0,0,105,115,111,109,109,112,52,50]);
-const source = (): ReelSource => ({ messageId: 'mid-1', senderId: '111', recipientId: '222', timestamp: Date.now(), attachmentUrl: 'https://lookaside.fbsbx.com/clip.mp4', kind: 'reel' });
+const source = (): ReelSource => ({ messageId: 'mid-1', senderId: '111', recipientId: '222', timestamp: Date.now(), attachmentUrl: 'https://lookaside.fbsbx.com/clip.mp4', kind: 'reel', title: 'Original @creator\n#Existing' });
 const configured = (): Env => ({ ...env, BUFFER_API_KEY: 'fake-buffer' });
 function payload(sender = '111', overrides: Record<string, unknown> = {}) {
-  return { object: 'instagram', entry: [{ id: '222', messaging: [{ sender: { id: sender }, recipient: { id: '222' }, timestamp: Date.now(), message: { mid: 'mid-1', attachments: [{ type: 'ig_reel', payload: { url: 'https://lookaside.fbsbx.com/clip.mp4' } }], ...overrides } }] }] };
+    return { object: 'instagram', entry: [{ id: '222', messaging: [{ sender: { id: sender }, recipient: { id: '222' }, timestamp: Date.now(), message: { mid: 'mid-1', attachments: [{ type: 'ig_reel', payload: { url: 'https://lookaside.fbsbx.com/clip.mp4', title: 'Original @creator\n#Existing' } }], ...overrides } }] }] };
 }
 async function sign(body: string) {
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode('test-app-secret'), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
@@ -156,7 +156,7 @@ describe('persistent jobs and media', () => {
       const body = JSON.parse(String(init?.body));
       expect(body.variables.input.mode).toBe('shareNow');
       expect(body.variables.input.schedulingType).toBe('automatic');
-      expect(body.variables.input.text).toContain('#ميمز #ضحك');
+      expect(body.variables.input.text).toBe('Original \n#Existing');
       creates++;
       return Response.json({data:{createPost:{__typename:'PostActionSuccess',post:{id:'post-'+creates,status:'sending',schedulingType:'automatic'}}}});
     });

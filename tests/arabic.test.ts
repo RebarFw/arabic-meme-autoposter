@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import worker from '../src/index';
-import { createCaption } from '../src/caption';
+import { withoutMentions } from '../src/caption';
 import { BufferClient } from '../src/buffer';
 import { enqueue, maintenance, processJob, retryRejectedDelivery, saveSetting, settings } from '../src/jobs';
 import { parseApiMessage } from '../src/instagram-api';
@@ -17,7 +17,9 @@ const channels: Channel[] = [
   { id: 'tt', service: 'tiktok', name: 'arabic_tt', serviceId: 'tiktok-id', organizationId: 'org', isDisconnected: false, isLocked: false, metadata: { defaultToReminders: false } },
 ];
 const mp4 = new Uint8Array([0,0,0,24,102,116,121,112,105,115,111,109,0,0,0,0,105,115,111,109,109,112,52,50]);
-const source = (senderId = '111', messageId = 'message-a', shortcode = 'SameReel'): ReelSource => ({ senderId, messageId, recipientId: '222', timestamp: Date.now(), kind: 'reel', reelUrl: `https://www.instagram.com/reel/${shortcode}/`, attachmentUrl: 'https://lookaside.fbsbx.com/reel.mp4' });
+const originalCaption = '  عنوان الفيديو 😂 @creator.one\n\nمع @friend_2! #الأصل #Original  ';
+const copiedCaption = '  عنوان الفيديو 😂 \n\nمع ! #الأصل #Original  ';
+const source = (senderId = '111', messageId = 'message-a', shortcode = 'SameReel'): ReelSource => ({ senderId, messageId, recipientId: '222', timestamp: Date.now(), kind: 'reel', reelUrl: `https://www.instagram.com/reel/${shortcode}/`, attachmentUrl: 'https://lookaside.fbsbx.com/reel.mp4', title: originalCaption });
 const empty = (): Env => ({ ...bindings(), OWNER_IG_SENDER_ID: undefined, FRIEND_IG_SENDER_ID: undefined });
 const setupPayload = (text: string, sender = '111') => ({ object: 'instagram', entry: [{ id: '222', messaging: [{ sender: { id: sender }, recipient: { id: '222' }, timestamp: Date.now(), message: { mid: crypto.randomUUID(), text } }] }] });
 
@@ -28,7 +30,7 @@ beforeEach(async () => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-function socialMock(failTiktok = false) {
+function socialMock(failTiktok = false, expectedCaption = copiedCaption) {
   const created: string[] = [];
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     if (String(input).includes('fbsbx.com')) return new Response(mp4, { headers: { 'Content-Type': 'video/mp4', 'Content-Length': String(mp4.length) } });
@@ -36,6 +38,7 @@ function socialMock(failTiktok = false) {
     if (body.query.includes('organizations')) return Response.json({ data: { account: { organizations: [{ id: 'org' }] } } });
     if (body.query.includes('query Channels')) return Response.json({ data: { channels } });
     if (body.query.includes('mutation')) {
+      expect(body.variables.input.text).toBe(expectedCaption);
       const service = body.variables.input.channelId;
       created.push(service);
       if (failTiktok && service === 'tt') return Response.json({ data: { createPost: { __typename: 'InvalidInputError', message: 'rejected' } } });
@@ -214,16 +217,45 @@ describe('Arabic captions, Buffer identity and secret protection', () => {
     await expect(new BufferClient(bindings()).publish('tt', 'tiktok', 'caption', 'https://worker.example/media')).rejects.toThrow(code);
     expect(JSON.stringify(logger.mock.calls)).not.toContain('PRIVATE_TOKEN_DO_NOT_LOG');
   });
-  it('generates stable short colloquial Arabic captions with appropriate hashtags', async () => {
-    const captions = await Promise.all(Array.from({ length: 24 }, (_, i) => createCaption('job-' + i)));
-    expect(new Set(captions).size).toBeGreaterThan(3);
-    for (const caption of captions) {
-      expect(caption.split('\n')[0]).toMatch(/[\u0600-\u06ff]/);
-      expect(caption.split('\n')[0]!.length).toBeLessThan(40);
-      expect(caption).toContain('#ميمز_عربي'); expect(caption).toContain('#memes');
-      expect(caption).not.toContain('had to share');
-    }
-    expect(await createCaption('job-1')).toBe(await createCaption('job-1'));
+  it.each([
+    [originalCaption, copiedCaption],
+    ['(@one), @two! @three. @a.b #same', '(), ! .  #same'],
+    ['@.creator @__name @123 @a..b... #Keep', '   ... #Keep'],
+    ['@one@two\r\n@THREE_4\t#ثابت', '\r\n\t#ثابت'],
+    ['أهلاً @صديق و @école2 #ضحك', 'أهلاً  و  #ضحك'],
+    ['  no mentions…\r\n#Original #Original\t', '  no mentions…\r\n#Original #Original\t'],
+    ['@creator', ''],
+    ['', ''],
+    ['at @ 5:00 #time', 'at @ 5:00 #time'],
+  ])('removes only mention spans from %j and never generates text or hashtags', (original, expected) => {
+    expect(withoutMentions(original)).toBe(expected);
+    expect(withoutMentions(expected)).toBe(expected);
+  });
+  it('replaces an old generated caption when downloading and preserves more than 1000 source characters', async () => {
+    const title = 'أ'.repeat(1200) + '\n@creator #Original';
+    const creates = socialMock(false, 'أ'.repeat(1200) + '\n #Original');
+    const parsed = parseApiMessage({ id: 'long-caption', created_time: new Date().toISOString(), from: { id: '111' }, to: { data: [{ id: '222' }] }, shares: { data: [{ type: 'reel', url: 'https://lookaside.fbsbx.com/reel.mp4', name: title }] } }, approvedSenders(bindings()), ['222'], 0)[0]!;
+    expect(parsed.title).toBe(title);
+    const id = await enqueue(bindings(), parsed);
+    await env.DB.prepare('UPDATE jobs SET caption=? WHERE id=?').bind('old generated text #fyp', id).run();
+    await processJob(bindings(), id);
+    expect(creates.sort()).toEqual(['ig', 'tt']);
+    expect(await env.DB.prepare('SELECT caption FROM jobs WHERE id=?').bind(id).first('caption')).toBe('أ'.repeat(1200) + '\n #Original');
+  });
+  it('publishes an explicitly empty original caption without adding text or hashtags', async () => {
+    const creates = socialMock(false, '');
+    const id = await enqueue(bindings(), { ...source(), title: '' });
+    await processJob(bindings(), id);
+    expect(creates.sort()).toEqual(['ig', 'tt']);
+  });
+  it('holds a captionless download without storing media or creating posts', async () => {
+    const creates = socialMock();
+    const id = await enqueue(bindings(), { ...source(), reelUrl: undefined, title: undefined });
+    await processJob(bindings(), id);
+    expect(creates).toEqual([]);
+    expect(await env.DB.prepare('SELECT state,caption,error_code FROM jobs WHERE id=?').bind(id).first()).toEqual({ state: 'pending', caption: null, error_code: 'source_caption_unavailable' });
+    expect(await env.DB.prepare('SELECT COUNT(*) FROM deliveries').first('COUNT(*)')).toBe(0);
+    expect(await env.MEDIA.head(`arabic-meme-autoposter/${id}.mp4`)).toBeNull();
   });
   it('fails closed for an incorrect, disconnected or reminder-only Buffer pair', async () => {
     const fetcher = vi.spyOn(globalThis, 'fetch');

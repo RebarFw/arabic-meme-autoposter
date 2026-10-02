@@ -25,14 +25,14 @@ const privacyPolicy = `<!doctype html>
 <main>
   <p class="brand">Arabic Meme Autoposter</p>
   <h1>Privacy Policy</h1>
-  <p class="updated">Last updated: <time datetime="2026-10-01">October 1, 2026</time></p>
+  <p class="updated">Last updated: <time datetime="2026-10-02">October 2, 2026</time></p>
 
   <p>Arabic Meme Autoposter is a private automation operated by the owner of its connected Instagram and TikTok meme accounts. It processes Instagram messages to repost videos that the owner has permission to share.</p>
 
   <h2>Information we process</h2>
   <p>Instagram sends message events through Meta's API. These can include sender and recipient account IDs, a message ID, a timestamp, message text, and shared media URLs, IDs or captions. The app checks the sender against the two separately approved Instagram-scoped sender IDs. Messages from other senders do not create publishing jobs or posts.</p>
   <p>The owner has enabled scheduled API reads, normally once per minute, of the two separate one-to-one conversations with the approved people. During sender setup, an authenticated administrator may check a limited number of recent messages to match the exact setup message and selected username. Unrelated message contents are discarded. Signed webhook notifications are also validated, but only one ingestion method creates publishing jobs at a time.</p>
-  <p>For an approved Reel, we process the video, generate a short caption, and store job status, channel IDs and Buffer post IDs to track publication and prevent duplicate posts. Access tokens and API keys are stored as Cloudflare Worker secrets.</p>
+  <p>For an approved Reel, we process the video, copy its original caption or title while removing @mentions, and store job status, channel IDs and Buffer post IDs to track publication and prevent duplicate posts. The remaining text and hashtags are preserved; no new captions or hashtags are generated. Access tokens and API keys are stored as Cloudflare Worker secrets.</p>
 
   <h2>How we use information</h2>
   <p>We use this information to verify authorized requests, obtain the shared video, publish it to the owner's connected channels, confirm publication, resolve errors and delete temporary files. If enabled, the app sends the owner a completion message through Instagram. We do not sell personal information or use message data for advertising.</p>
@@ -49,7 +49,7 @@ const privacyPolicy = `<!doctype html>
 
   <h2>Storage and retention</h2>
   <p>Temporary videos are deleted after both posts are confirmed as sent, or when they are no longer needed after a known failure. Video access links normally expire after 24 hours. Cleanup removes expired or stuck files, with a separate R2 rule that expires the app's files after two days; physical deletion may take additional time to complete.</p>
-  <p>Stored source message details, media URLs and generated captions are normally removed about two days after a job finishes or is marked for attention. Minimal job hashes, recipient and channel IDs, publication records and error codes are retained to prevent duplicates and support operation. Polling retains a small bounded set of message hashes and operational timestamps. The one-time sender setup stores a hash of its authorization code and the verified sender ID; this temporary proof is removed after setup completes or its 15-minute validity expires. The two approved sender IDs and credentials are retained until the owner replaces or removes them. Service logs and provider backups follow the applicable service's retention settings.</p>
+  <p>Stored source message details, media URLs and copied captions are normally removed about two days after a job finishes or is marked for attention. Minimal job hashes, recipient and channel IDs, publication records and error codes are retained to prevent duplicates and support operation. Polling retains a small bounded set of message hashes and operational timestamps. The one-time sender setup stores a hash of its authorization code and the verified sender ID; this temporary proof is removed after setup completes or its 15-minute validity expires. The two approved sender IDs and credentials are retained until the owner replaces or removes them. Service logs and provider backups follow the applicable service's retention settings.</p>
   <p>Deleting the app's temporary copy does not delete a video already published on Instagram or TikTok, or copies retained by those services.</p>
 
   <h2>Security and website visits</h2>

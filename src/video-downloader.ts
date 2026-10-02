@@ -1,7 +1,7 @@
 import { AppError, type Env, type ReelSource } from './types';
 import { safeFetch } from './security';
 
-export interface DownloadedVideo { response: Response; provider: string }
+export interface DownloadedVideo { response: Response; provider: string; caption?: string }
 export interface VideoDownloader {
   readonly name: string;
   supports(source: ReelSource, env: Env): boolean;

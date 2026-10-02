@@ -43,7 +43,7 @@ Both people share one D1 state row, lease, backoff and bounded hash cache. Quiet
 
 The full reference downloader chain is retained: Meta attachment, authorized Meta Graph media, public Reel metadata, optional generic API, Apify Instagram Reel Scraper, VideoDropper, FastDL, SaveFrom and SnapInsta. Free direct providers run first. Apify precedes the unreliable website fallbacks as in the working project. No CAPTCHA solving, remote JavaScript execution, cookies or account credentials are sent to websites. The optional local VideoDropper recovery tool remains available for an existing approved job only.
 
-MP4 signature, MIME, byte limits, trusted hosts, redirect destinations and full streamed length are validated. Short colloquial Arabic captions are deterministic and local, with Arabic meme hashtags and general discovery tags. Source captions are not copied.
+MP4 signature, MIME, byte limits, trusted hosts, redirect destinations and full streamed length are validated. Both destinations receive the original Reel caption/title with every @mention removed. All remaining text, punctuation, whitespace, line breaks and hashtags are preserved; nothing is generated, translated, trimmed, truncated or appended. Caption metadata comes from the media provider or the share's title, never from the sender's DM text or an Open Graph description. An explicitly empty source caption stays empty. If no original caption is available, publishing waits for a bounded download retry and then requires operator attention instead of inventing text.
 
 ## Cost controls
 

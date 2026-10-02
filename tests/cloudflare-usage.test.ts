@@ -167,7 +167,7 @@ it('preserves a download job and its retry allowance when quota is exhausted dur
   });
   await saveSetting(env, 'channels', [{ id: 'ig', service: 'instagram' }, { id: 'tt', service: 'tiktok' }]);
   const guarded = withCloudflareR2Guard({ ...bindings, BUFFER_API_KEY: 'fake-buffer' });
-  const id = await enqueue(guarded, { messageId: 'quota-during-transfer', senderId: '111', recipientId: '222', timestamp: Date.now(), attachmentUrl: 'https://lookaside.fbsbx.com/quota-test.mp4', kind: 'reel' });
+  const id = await enqueue(guarded, { messageId: 'quota-during-transfer', senderId: '111', recipientId: '222', timestamp: Date.now(), attachmentUrl: 'https://lookaside.fbsbx.com/quota-test.mp4', kind: 'reel', title: 'Original @creator #Same' });
   await processJob(guarded, id);
   expect(await env.DB.prepare('SELECT state,attempts,error_code,lease_until FROM jobs WHERE id=?').bind(id).first()).toEqual({ state: 'pending', attempts: 0, error_code: 'cloudflare_r2_class_a_pause', lease_until: 0 });
   expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM deliveries WHERE job_id=?').bind(id).first('n')).toBe(0);

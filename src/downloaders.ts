@@ -30,10 +30,10 @@ export class MetaGraphDownloader implements VideoDownloader {
   supports(source: ReelSource, env: Env): boolean { return !!source.mediaId && !!env.META_ACCESS_TOKEN; }
   async download(source: ReelSource, env: Env, parent?: AbortSignal): Promise<DownloadedVideo> {
     const signal = downloadSignal(parent, 35_000);
-    const media = await metaRequest<{ media_type?: string; media_product_type?: string; media_url?: string; permalink?: string }>(env,
-      `${encodeURIComponent(source.mediaId!)}?fields=media_type,media_product_type,media_url,permalink`, { signal });
+    const media = await metaRequest<{ media_type?: string; media_product_type?: string; media_url?: string; permalink?: string; caption?: string }>(env,
+      `${encodeURIComponent(source.mediaId!)}?fields=media_type,media_product_type,media_url,permalink,caption`, { signal });
     if (media.media_type !== 'VIDEO' || (media.media_product_type !== 'REELS' && !reelUrl(media.permalink)) || !media.media_url) throw new AppError('meta_media_not_reel');
-    return videoAt(media.media_url, META_MEDIA_HOSTS, this.name, env, signal);
+    return { ...await videoAt(media.media_url, META_MEDIA_HOSTS, this.name, env, signal), caption: typeof media.caption === 'string' ? media.caption : undefined };
   }
 }
 
@@ -81,11 +81,11 @@ export class ApiVideoDownloader implements VideoDownloader {
       body: JSON.stringify({ url: source.reelUrl, mediaId: source.mediaId, attachmentUrl: source.attachmentUrl }),
     }); } catch { throw new AppError('downloader_api_network_error', true); }
     if (!response.ok) { await response.body?.cancel(); throw new AppError('downloader_api_error', response.status === 429 || response.status >= 500); }
-    let data: { videoUrl?: string; contentType?: string; isReel?: boolean };
+    let data: { videoUrl?: string; contentType?: string; isReel?: boolean; caption?: string };
     try { data = JSON.parse(new TextDecoder().decode(await limitedBytes(response.body, 64_000))); } catch { throw new AppError('downloader_api_invalid_response'); }
     if (!data.videoUrl || (source.kind !== 'reel' && data.isReel !== true)) throw new AppError('downloader_api_not_reel');
     const hosts = [...META_MEDIA_HOSTS, ...(env.DOWNLOADER_MEDIA_HOSTS?.split(',').map(h => h.trim()).filter(h => /^[a-z0-9.-]+$/.test(h)) ?? [])];
-    return videoAt(data.videoUrl, hosts, this.name, env, signal);
+    return { ...await videoAt(data.videoUrl, hosts, this.name, env, signal), caption: typeof data.caption === 'string' ? data.caption : undefined };
   }
 }
 
@@ -99,7 +99,7 @@ export class ApifyVideoDownloader implements VideoDownloader {
     const token = env.DOWNLOADER_API_KEY.trim();
     if (!/^[A-Za-z0-9_-]{10,256}$/.test(token)) throw new AppError('invalid_downloader_key_format');
     await reserveApifyRun(env, signal);
-    const query = new URLSearchParams({ timeout: '60', maxTotalChargeUsd: String(APIFY_RUN_MAX_USD), maxItems: '1', limit: '1', clean: 'true', fields: 'shortCode,type,productType,videoUrl' });
+    const query = new URLSearchParams({ timeout: '60', maxTotalChargeUsd: String(APIFY_RUN_MAX_USD), maxItems: '1', limit: '1', clean: 'true', fields: 'shortCode,type,productType,videoUrl,caption' });
     let response: Response;
     try {
       response = await fetch('https://api.apify.com/v2/actors/apify~instagram-reel-scraper/run-sync-get-dataset-items?' + query, {
@@ -118,7 +118,7 @@ export class ApifyVideoDownloader implements VideoDownloader {
     const item = items[0];
     if (!item || typeof item !== 'object' || item.shortCode !== new URL(url).pathname.split('/')[2] || item.type !== 'Video' || item.productType !== 'clips' || typeof item.videoUrl !== 'string') throw new AppError('apify_result_not_requested_reel');
     // The key is sent only to Apify; media downloads never inherit its headers.
-    return videoAt(item.videoUrl, META_MEDIA_HOSTS, this.name, env, signal);
+    return { ...await videoAt(item.videoUrl, META_MEDIA_HOSTS, this.name, env, signal), caption: typeof item.caption === 'string' ? item.caption : undefined };
   }
 }
 
@@ -133,15 +133,28 @@ export function configuredThirdPartyProviders(env: Env): VideoDownloader[] {
   });
 }
 
-export async function downloadVideo(source: ReelSource, env: Env, jobId: string, parent?: AbortSignal): Promise<DownloadedVideo> {
+export async function downloadVideo(source: ReelSource, env: Env, jobId: string, parent?: AbortSignal, requireCaption = false): Promise<DownloadedVideo> {
   // Fit the entire chain and its streamed upload inside the job's 180s lease.
   const signal = downloadSignal(parent, 150_000);
   let retryable = false;
+  let missingCaption = false;
   for (const provider of [...providers, ...configuredThirdPartyProviders(env)]) {
     if (!provider.supports(source, env)) continue;
     if (signal.aborted) throw new AppError('downloader_deadline_exceeded', true);
-    try { return await provider.download(source, env, signal); }
+    try {
+      const video = await provider.download(source, env, signal);
+      // A share's metadata title is a fallback, never the sender's DM text or
+      // an Open Graph description containing creator names and engagement counts.
+      const caption = video.caption ?? source.title;
+      if (requireCaption && typeof caption !== 'string') {
+        await video.response.body?.cancel();
+        missingCaption = true;
+        log('downloader_failed', { job: jobId, provider: provider.name, code: 'source_caption_unavailable' });
+        continue;
+      }
+      return { ...video, caption };
+    }
     catch (error) { retryable ||= error instanceof AppError && error.retryable; log('downloader_failed', { job: jobId, provider: provider.name, code: errorCode(error) }); }
   }
-  throw new AppError('no_downloader_could_resolve_reel', retryable);
+  throw new AppError(missingCaption ? 'source_caption_unavailable' : 'no_downloader_could_resolve_reel', missingCaption || retryable);
 }

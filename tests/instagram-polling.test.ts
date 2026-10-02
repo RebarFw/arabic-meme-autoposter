@@ -102,7 +102,7 @@ describe('durable owner-only polling', () => {
     const items = [message()];
     const api = mockApi(items);
     await pollInstagram(bindings());
-    items.push(message({ id: 'message-2', shares: { data: [{ type: 'ig_reel', id: 'media-2', url: 'https://lookaside.fbsbx.com/reel.mp4' }] } }));
+    items.push(message({ id: 'message-2', shares: { data: [{ type: 'ig_reel', id: 'media-2', url: 'https://lookaside.fbsbx.com/reel.mp4', name: 'clip' }] } }));
     api.fetcher.mockClear();
     await due();
     await pollInstagram(bindings());
@@ -124,10 +124,12 @@ describe('durable owner-only polling', () => {
   it('resolves a native link-only share through the optional provider and publishes both channels once', async () => {
     const api = mockApi([message({ shares: { data: [{ link: 'https://www.instagram.com/reel/ABCdef123/' }] } })]);
     const original = api.fetcher.getMockImplementation()!;
+    const texts: string[] = [];
     api.fetcher.mockImplementation(async (input, init) => {
       if (String(input).includes('www.instagram.com/reel/')) return new Response('<html></html>');
       const guard = apifyGuardResponse(input); if (guard) return guard;
-      if (String(input).includes('api.apify.com')) return Response.json([{ shortCode: 'ABCdef123', type: 'Video', productType: 'clips', videoUrl: 'https://lookaside.fbsbx.com/reel.mp4' }]);
+      if (String(input).includes('api.apify.com')) return Response.json([{ shortCode: 'ABCdef123', type: 'Video', productType: 'clips', videoUrl: 'https://lookaside.fbsbx.com/reel.mp4', caption: '  Original @creator.one 😂\n\n#Same #نفسه  ' }]);
+      if (String(input) === 'https://api.buffer.com' && JSON.parse(String(init?.body)).query.includes('mutation')) texts.push(JSON.parse(String(init?.body)).variables.input.text);
       return original(input, init);
     });
     const configured: Env = { ...bindings(), DOWNLOADER_PROVIDER: 'apify', DOWNLOADER_API_KEY: 'fake-apify-api-key' };
@@ -135,11 +137,12 @@ describe('durable owner-only polling', () => {
     await due();
     await pollInstagram(configured);
     expect(api.creates()).toBe(2);
+    expect(texts).toEqual(['  Original  😂\n\n#Same #نفسه  ', '  Original  😂\n\n#Same #نفسه  ']);
     expect(await countJobs()).toBe(1);
     expect(api.fetcher.mock.calls.filter(([url]) => String(url).includes('api.apify.com/v2/actors/'))).toHaveLength(1);
   });
   it('publishes a native share through a free third-party fallback once even after repeated polling and job processing', async () => {
-    const api = mockApi([message({ shares: { data: [{ link: 'https://www.instagram.com/reel/ABCdef123/' }] } })]);
+    const api = mockApi([message({ shares: { data: [{ link: 'https://www.instagram.com/reel/ABCdef123/', name: 'Original @creator #Same' }] } })]);
     const original = api.fetcher.getMockImplementation()!;
     api.fetcher.mockImplementation(async (input, init) => {
       if (String(input).includes('www.instagram.com/reel/')) return new Response('<html></html>');
@@ -288,7 +291,7 @@ describe('safe pre-publication download recovery', () => {
   });
   it('recovers a resolved native Reel once, confirms both sent posts and deletes private media', async () => {
     const api = mockApi();
-    const source = parseApiMessage(message({ shares: { data: [{ link: 'https://www.instagram.com/reel/ABCdef123/' }] } }), '111', ['222', '444'], 0)[0]!;
+    const source = parseApiMessage(message({ shares: { data: [{ link: 'https://www.instagram.com/reel/ABCdef123/', name: 'Original @creator #Same' }] } }), '111', ['222', '444'], 0)[0]!;
     const id = await enqueue(bindings(), source);
     await env.DB.prepare("UPDATE jobs SET state='attention' WHERE id=?").bind(id).run();
     const resolved = { reelUrl: source.reelUrl!, videoUrl: 'https://lookaside.fbsbx.com/reel.mp4' };
