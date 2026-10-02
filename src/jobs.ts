@@ -1,4 +1,4 @@
-import { BufferClient } from './buffer';
+import { BufferClient, definiteBufferRejection } from './buffer';
 import { senderAllowed } from './senders';
 import { createCaption } from './caption';
 import { cloudflareCapacity, requireCloudflareCapacity } from './cloudflare-usage';
@@ -76,6 +76,39 @@ export async function refreshPosts(env: Env, id: string): Promise<void> {
   await processJob(env, id);
 }
 
+export async function retryRejectedDelivery(env: Env, id: string, service: string): Promise<void> {
+  await requireCloudflareCapacity(env);
+  if (!/^[a-f0-9]{64}$/.test(id) || !['instagram', 'tiktok'].includes(service)) throw new AppError('delivery_retry_not_safe');
+  const job = await env.DB.prepare('SELECT * FROM jobs WHERE id=?').bind(id).first<Job>();
+  if (!job?.source_json || job.state !== 'failed' || job.object_key || job.media_token || job.lease_until > Date.now()) throw new AppError('delivery_retry_not_safe');
+  const source: ReelSource = JSON.parse(job.source_json);
+  const recipients = await settings<string[]>(env, 'recipient_ids');
+  if (source.kind !== 'reel' || !senderAllowed(env, source.senderId) || !recipients?.includes(source.recipientId) || !Number.isFinite(source.timestamp) || source.timestamp < Date.now() - 48 * 3600_000 || source.timestamp > Date.now() + 300_000) throw new AppError('delivery_retry_not_safe');
+  const rows = await deliveries(env, id), rejected = rows.find(row => row.service === service), sent = rows.find(row => row.service !== service);
+  if (rows.length !== 2 || rejected?.state !== 'failed' || rejected.post_id || !definiteBufferRejection(rejected.error_code) || sent?.state !== 'accepted' || sent.post_status !== 'sent' || !sent.post_id) throw new AppError('delivery_retry_not_safe');
+  const client = new BufferClient(env), pair = await client.discoverChannels();
+  if (rows.some(row => !pair.some(channel => channel.service === row.service && channel.id === row.channel_id))) throw new AppError('buffer_channel_identity_mismatch');
+  const published = await client.post(sent.post_id);
+  if (published.id !== sent.post_id || published.status !== 'sent' || published.schedulingType !== 'automatic') throw new AppError('delivery_retry_not_safe');
+  const now = Date.now(), reservation = crypto.randomUUID();
+  // Transactional reservation excludes cron and concurrent operator retries.
+  // Keep the successful delivery and every dedupe tombstone untouched.
+  const results = await env.DB.batch([
+    env.DB.prepare(`UPDATE jobs SET lease_token=?,lease_until=? WHERE id=? AND state='failed' AND source_json=? AND object_key IS NULL AND media_token IS NULL AND lease_until<=?
+      AND EXISTS (SELECT 1 FROM deliveries WHERE job_id=? AND service=? AND state='failed' AND post_id IS NULL AND error_code=?)
+      AND EXISTS (SELECT 1 FROM deliveries WHERE job_id=? AND service=? AND state='accepted' AND post_status='sent' AND post_id=?)`)
+      .bind(reservation, now + 180_000, id, job.source_json, now, id, service, rejected.error_code, id, sent.service, sent.post_id),
+    env.DB.prepare(`UPDATE deliveries SET state='pending',error_code=NULL,updated_at=? WHERE job_id=? AND service=? AND state='failed' AND post_id IS NULL AND error_code=?
+      AND EXISTS (SELECT 1 FROM jobs WHERE id=? AND lease_token=?)`)
+      .bind(now, id, service, rejected.error_code, id, reservation),
+    env.DB.prepare(`UPDATE jobs SET state='pending',error_code=NULL,attempts=0,next_run_at=?,lease_token=NULL,lease_until=0,updated_at=? WHERE id=? AND lease_token=?
+      AND EXISTS (SELECT 1 FROM deliveries WHERE job_id=? AND service=? AND state='pending' AND post_id IS NULL)`)
+      .bind(now, now, id, reservation, id, service),
+  ]);
+  if (results.some(result => result.meta.changes !== 1)) throw new AppError('delivery_retry_not_safe');
+  log('rejected_delivery_retry_queued', { job: id, service });
+}
+
 export async function claimJob(env: Env, id: string, now = Date.now()): Promise<Job | null> {
   const lease = crypto.randomUUID();
   return env.DB.prepare(`UPDATE jobs SET lease_token=?, lease_until=?, updated_at=?
@@ -140,7 +173,7 @@ async function publish(env: Env, job: Job): Promise<void> {
     } catch (error) {
       const code = errorCode(error);
       await env.DB.prepare('UPDATE deliveries SET state=?, error_code=?, updated_at=? WHERE job_id=? AND service=?')
-        .bind(code === 'buffer_create_rejected' ? 'failed' : 'unknown', code, Date.now(), job.id, delivery.service).run();
+        .bind(definiteBufferRejection(code) ? 'failed' : 'unknown', code, Date.now(), job.id, delivery.service).run();
       log('buffer_submit_failed', { job: job.id, service: delivery.service, code });
     }
   }

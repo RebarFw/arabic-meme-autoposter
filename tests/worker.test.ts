@@ -197,7 +197,20 @@ describe('persistent jobs and media', () => {
     const stored = await job(id);
     const path = `/media/${id}.mp4?token=${stored.media_token}`;
     expect((await call(`/media/${id}.mp4?token=${'a'.repeat(64)}`)).status).toBe(404);
-    expect((await call(path,{method:'HEAD'})).headers.get('Content-Length')).toBe(String(mp4.length));
+    const originalHead = env.MEDIA.head.bind(env.MEDIA);
+    vi.spyOn(env.MEDIA, 'head').mockImplementation(async key => {
+      const object = await originalHead(key);
+      return object ? { ...object, range: { offset: 0, length: object.size }, writeHttpMetadata: object.writeHttpMetadata.bind(object) } : null;
+    });
+    const head = await call(path,{method:'HEAD'});
+    expect(head.status).toBe(200);
+    expect(head.headers.get('Content-Length')).toBe(String(mp4.length));
+    expect(head.headers.get('Content-Range')).toBeNull();
+    expect((await call(path,{method:'HEAD',headers:{Range:'bytes=0-7'}})).status).toBe(200);
+    const whole = await call(path);
+    expect(whole.status).toBe(200);
+    expect(whole.headers.get('Content-Range')).toBeNull();
+    expect((await whole.arrayBuffer()).byteLength).toBe(mp4.length);
     const ranged = await call(path,{headers:{Range:'bytes=0-7'}});
     expect(ranged.status).toBe(206);
     expect((await ranged.arrayBuffer()).byteLength).toBe(8);

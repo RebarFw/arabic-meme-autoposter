@@ -230,7 +230,7 @@ describe('authenticated API owner identification', () => {
   });
   it('protects owner import and polling controls with admin authorization', async () => {
     const fetcher = vi.spyOn(globalThis, 'fetch');
-    for (const [path, method] of [['owner/import', 'POST'], ['poll', 'POST'], ['poll/validate', 'GET'], ['download/diagnose', 'GET'], ['download/probe-apify', 'POST'], ['apify/budget', 'GET'], ['apify/enforce-limit', 'POST'], ['jobs/retry-download', 'POST'], ['jobs/refresh-posts', 'POST']]) {
+    for (const [path, method] of [['owner/import', 'POST'], ['poll', 'POST'], ['poll/validate', 'GET'], ['download/diagnose', 'GET'], ['download/probe-apify', 'POST'], ['apify/budget', 'GET'], ['apify/enforce-limit', 'POST'], ['jobs/retry-download', 'POST'], ['jobs/refresh-posts', 'POST'], ['jobs/retry-rejected-delivery', 'POST']]) {
       const ctx = createExecutionContext();
       const response = await worker.fetch(new Request('https://worker.example/admin/' + path, { method }), bindings(), ctx);
       expect(response.status).toBe(401);

@@ -12,6 +12,10 @@ Do not reset `unknown` or `submitting` to `pending`. Check the appropriate Buffe
 
 Buffer publication failures may require reconnecting the channel or correcting a video's codec/duration. These are recorded separately; an accepted post on the other network is never recreated. Do not resend content until you have checked both actual channels.
 
+For a definite Buffer create rejection with no post ID, `npm run retry:delivery -- JOB_HASH tiktok` (or `instagram`) can retry that one delivery after investigation. It requires the original recent approved Reel, a failed job whose private media has been removed, exactly one definitively rejected create, unchanged pinned channels, and the other post confirmed remotely as automatic and sent. The transaction queues a new guarded download under the same job and preserves the successful delivery and permanent tombstones. Concurrent requests queue at most one retry. It refuses unknown/submitting results, a rejection carrying a post ID, remote publishing failures, expired sources and changed sender authorization. This is an explicit operator action; cron does not automatically repeat rejected creates.
+
+Buffer validation text is reduced to fixed rejection codes for media readability, hashtags, access, missing resources, limits or other input. Raw provider messages, signed media links and echoed captions are never recorded in routine logs or returned by status.
+
 ## Download failure before Buffer
 
 `npm run download:diagnose` returns only structural public-page facts for the latest job; `-- post` and `-- embed` inspect alternative public routes. It never returns URLs, page contents or credentials, and does not upload or post. `npm run polling:validate` also reports safe structure and actual Meta errors for the latest message's share/attachment fields.

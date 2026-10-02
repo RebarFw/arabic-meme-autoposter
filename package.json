@@ -34,6 +34,7 @@
     "retry:download": "node scripts/retry-download.mjs",
     "recover:download": "node scripts/recover-download.mjs",
     "posts:refresh": "node scripts/refresh-posts.mjs",
+    "retry:delivery": "node scripts/retry-rejected-delivery.mjs",
     "meta:diagnose": "node scripts/admin.mjs meta:diagnose",
     "meta:subscribe": "node scripts/admin.mjs meta:subscribe",
     "db:remote": "node scripts/wrangler.mjs d1 migrations apply arabic-meme-autoposter-jobs --remote",

@@ -102,7 +102,9 @@ export async function serveMedia(request: Request, env: Env, jobId: string): Pro
   output.set('Accept-Ranges', 'bytes');
   output.set('ETag', object.httpEtag);
   let status = 200;
-  if ('range' in object && object.range && 'offset' in object.range && 'length' in object.range) {
+  // R2 metadata can include a full-object range even for HEAD. Only an
+  // actual GET Range request is a partial response to the media consumer.
+  if (request.method === 'GET' && range && 'range' in object && object.range && 'offset' in object.range && 'length' in object.range) {
     const { offset = 0, length = object.size } = object.range;
     output.set('Content-Range', `bytes ${offset}-${offset + length - 1}/${object.size}`);
     output.set('Content-Length', String(length));

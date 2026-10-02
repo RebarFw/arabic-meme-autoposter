@@ -3,7 +3,7 @@ import { apifyBudgetStatus } from './apify-budget';
 import { CloudflareUsageError, cleanupCloudflareReservations, cloudflareCapacity, requireCloudflareCapacity, withCloudflareR2Guard } from './cloudflare-usage';
 import { probeCloudflareGuard } from './cloudflare-probe';
 import { diagnoseDownload, probeApifyDownload, probeThirdPartyDownload } from './download-diagnostics';
-import { enqueue, maintenance, processJob, refreshPosts, retryDownload, saveSetting, settings } from './jobs';
+import { enqueue, maintenance, processJob, refreshPosts, retryDownload, retryRejectedDelivery, saveSetting, settings } from './jobs';
 import { metaRequest, parseMessages } from './meta';
 import { diagnoseMeta } from './meta-diagnostics';
 import { acceptOwnerSetup, diagnoseOwnerSetup, finishOwnerSetup, importOwnerSetup, ownerSetupStatus, startOwnerSetup } from './owner-setup';
@@ -51,6 +51,11 @@ async function admin(request: Request, env: Env, path: string): Promise<Response
     const body = JSON.parse(new TextDecoder().decode(await limitedBytes(request.body, 1024)));
     await refreshPosts(env, typeof body?.jobId === 'string' ? body.jobId : '');
     return json({ checked: true, jobId: body.jobId });
+  }
+  if (path === '/admin/jobs/retry-rejected-delivery' && request.method === 'POST') {
+    const body = JSON.parse(new TextDecoder().decode(await limitedBytes(request.body, 1024)));
+    await retryRejectedDelivery(env, typeof body?.jobId === 'string' ? body.jobId : '', typeof body?.service === 'string' ? body.service : '');
+    return json({ queued: true, jobId: body.jobId, service: body.service });
   }
   if (path === '/admin/download/diagnose' && request.method === 'GET') {
     const route = new URL(request.url).searchParams.get('route');

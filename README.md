@@ -19,7 +19,7 @@ An approved person shares a Reel in a separate 1-to-1 Instagram DM to the meme a
 
 The user approved publishing the Arabic Meta app on October 2, 2026, and its dashboard now reports Published. Webhook signature validation and GET verification are retained, but only polling ingests publishing jobs in this configuration. No App Review or group chat integration was performed.
 
-Publishing resolved live DM visibility: the same installed receiver token immediately returned conversation data. Both separate setup DMs were read through Meta, and their two distinct sender IDs were securely installed. Polling is active. The real social posting test remains pending; see [installation evidence](docs/testing.md).
+Publishing resolved live DM visibility: the same installed receiver token immediately returned conversation data. Both separate setup DMs were read through Meta, and their two distinct sender IDs were securely installed. Polling is active. Two real Reels reached both @avexiro0 destinations with all four posts sent and both private R2 objects deleted. The first TikTok post required guarded recovery; the friend's second Reel completed automatically. Sharing the exact first Reel from the friend created no additional job or post. See [installation evidence](docs/testing.md).
 
 ### Two-person authorization
 
@@ -74,6 +74,8 @@ npm run polling:validate
 npm run cloudflare:validate
 npm run apify:budget
 ```
+
+If one network rejects a create while the other is already sent, see the guarded `retry:delivery` command in [operations](docs/operations.md). It preserves the successful post and refuses uncertain submissions.
 
 The `.secrets/` filenames are `buffer-api-key.txt`, `apify-token.txt`, `cloudflare-usage-token.txt`, `meta-access-token.txt`, and `meta-app-secret.txt`. A separate local `cloudflare-deploy-token.txt` can grant Workers Scripts Edit, Workers R2 Storage Edit, D1 Edit and Account Settings Read for the pinned account. This deployment credential is never uploaded to the Worker; its runtime analytics reader remains separate. Deployment creates project-specific `admin-token` and `meta-verify-token`. The installer uploads only nonempty runtime secret files through Wrangler stdin and prints names only. Leave the local operator tokens available for diagnostics and Meta verification; remove source credentials only after secure installation is confirmed and recovery is assured.
 

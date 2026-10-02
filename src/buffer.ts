@@ -2,6 +2,20 @@ import { AppError, type Channel, type Env } from './types';
 import { limitedBytes } from './security';
 
 export interface BufferPost { id: string; status: string; schedulingType: string; }
+const rejectedCodes = ['buffer_create_rejected', 'buffer_create_rejected_input', 'buffer_create_rejected_media', 'buffer_create_rejected_hashtags', 'buffer_create_rejected_access', 'buffer_create_rejected_not_found', 'buffer_create_rejected_limit'];
+export const definiteBufferRejection = (code: string | null): boolean => !!code && rejectedCodes.includes(code);
+
+function rejectionCode(type: string, message?: string): string {
+  if (type === 'UnauthorizedError') return 'buffer_create_rejected_access';
+  if (type === 'NotFoundError') return 'buffer_create_rejected_not_found';
+  if (type === 'LimitReachedError') return 'buffer_create_rejected_limit';
+  // Read provider text only to select a fixed code. Never retain or log it:
+  // validation messages can echo signed URLs, captions or credentials.
+  const text = typeof message === 'string' ? message.toLowerCase() : '';
+  if (text.includes('hashtag')) return 'buffer_create_rejected_hashtags';
+  if (/(?:video|media|image).*(?:read|fetch|download|url)|(?:read|fetch|download).*(?:video|media|image)/.test(text)) return 'buffer_create_rejected_media';
+  return 'buffer_create_rejected_input';
+}
 export const CREATE_POST = `mutation PublishReel($input: CreatePostInput!) {
   createPost(input: $input) {
     __typename
@@ -66,8 +80,8 @@ export class BufferClient {
       assets: [{ video: { url: mediaUrl } }],
       ...(service === 'instagram' ? { metadata: { instagram: { type: 'reel', shouldShareToFeed: true } } } : {}),
     };
-    const result = await this.query<{ createPost: { __typename: string; post?: BufferPost } }>(CREATE_POST, { input }, true);
-    if (['InvalidInputError','UnauthorizedError','NotFoundError','LimitReachedError'].includes(result.createPost.__typename)) throw new AppError('buffer_create_rejected');
+    const result = await this.query<{ createPost: { __typename: string; post?: BufferPost; message?: string } }>(CREATE_POST, { input }, true);
+    if (['InvalidInputError','UnauthorizedError','NotFoundError','LimitReachedError'].includes(result.createPost.__typename)) throw new AppError(rejectionCode(result.createPost.__typename, result.createPost.message));
     if (result.createPost.__typename !== 'PostActionSuccess') throw new AppError('buffer_create_unknown');
     const post = result.createPost.post;
     if (!post?.id || !post.status) throw new AppError('buffer_create_unknown');

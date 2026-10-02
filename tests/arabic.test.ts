@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import worker from '../src/index';
 import { createCaption } from '../src/caption';
 import { BufferClient } from '../src/buffer';
-import { enqueue, maintenance, processJob, saveSetting, settings } from '../src/jobs';
+import { enqueue, maintenance, processJob, retryRejectedDelivery, saveSetting, settings } from '../src/jobs';
 import { parseApiMessage } from '../src/instagram-api';
 import { pollInstagram } from '../src/instagram-polling';
 import { acceptOwnerSetup, finishOwnerSetup, importOwnerSetup, ownerSetupStatus, startOwnerSetup } from '../src/owner-setup';
@@ -33,6 +33,8 @@ function socialMock(failTiktok = false) {
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     if (String(input).includes('fbsbx.com')) return new Response(mp4, { headers: { 'Content-Type': 'video/mp4', 'Content-Length': String(mp4.length) } });
     const body = JSON.parse(String(init?.body));
+    if (body.query.includes('organizations')) return Response.json({ data: { account: { organizations: [{ id: 'org' }] } } });
+    if (body.query.includes('query Channels')) return Response.json({ data: { channels } });
     if (body.query.includes('mutation')) {
       const service = body.variables.input.channelId;
       created.push(service);
@@ -87,6 +89,60 @@ describe('exact two-person allowlist and permanent Reel deduplication', () => {
     expect(creates.sort()).toEqual(['ig', 'tt']);
     expect(await env.DB.prepare('SELECT state FROM jobs').first('state')).toBe('failed');
     expect(await env.MEDIA.head(`arabic-meme-autoposter/${id}.mp4`)).toBeNull();
+  });
+  it('recovers only a definitively rejected network with one concurrent retry and keeps the sent post and tombstones', async () => {
+    socialMock(true);
+    const id = await enqueue(bindings(), source());
+    await processJob(bindings(), id);
+    await env.DB.prepare('UPDATE jobs SET next_run_at=0').run();
+    await processJob(bindings(), id);
+    const original = await env.DB.prepare("SELECT * FROM deliveries WHERE service='instagram'").first();
+    const creates = socialMock();
+    const attempts = await Promise.allSettled([retryRejectedDelivery(bindings(), id, 'tiktok'), retryRejectedDelivery(bindings(), id, 'tiktok')]);
+    expect(attempts.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    await processJob(bindings(), id);
+    await env.DB.prepare('UPDATE jobs SET next_run_at=0').run();
+    await processJob(bindings(), id);
+    expect(creates).toEqual(['tt']);
+    expect(await env.DB.prepare("SELECT * FROM deliveries WHERE service='instagram'").first()).toEqual(original);
+    expect(await env.DB.prepare('SELECT state FROM jobs').first('state')).toBe('completed');
+    expect(await env.MEDIA.head(`arabic-meme-autoposter/${id}.mp4`)).toBeNull();
+    expect(await enqueue(bindings(), source('777', 'repeat-from-friend'))).toBe(id);
+    expect(await env.DB.prepare('SELECT COUNT(*) FROM jobs').first('COUNT(*)')).toBe(1);
+    expect(await env.DB.prepare('SELECT COUNT(*) FROM message_tombstones').first('COUNT(*)')).toBe(2);
+  });
+  it.each([
+    ['unknown', null, 'buffer_create_unknown'],
+    ['submitting', null, null],
+    ['failed', 'possibly-created', 'buffer_create_rejected_input'],
+    ['failed', null, 'buffer_publish_failed'],
+  ])('refuses recovery for %s or any possibly created post', async (state, postId, code) => {
+    socialMock(true);
+    const id = await enqueue(bindings(), source());
+    await processJob(bindings(), id);
+    await env.DB.prepare('UPDATE jobs SET next_run_at=0').run();
+    await processJob(bindings(), id);
+    await env.DB.prepare("UPDATE deliveries SET state=?,post_id=?,error_code=? WHERE service='tiktok'").bind(state, postId, code).run();
+    const creates = socialMock();
+    await expect(retryRejectedDelivery(bindings(), id, 'tiktok')).rejects.toThrow('delivery_retry_not_safe');
+    expect(creates).toEqual([]);
+    expect(await env.DB.prepare('SELECT state FROM jobs').first('state')).toBe('failed');
+    expect(await env.MEDIA.head(`arabic-meme-autoposter/${id}.mp4`)).toBeNull();
+  });
+  it('refuses a stale or no-longer-approved source and rechecks the successful remote post', async () => {
+    socialMock(true);
+    const input = source(), id = await enqueue(bindings(), input);
+    await processJob(bindings(), id);
+    await env.DB.prepare('UPDATE jobs SET next_run_at=0').run();
+    await processJob(bindings(), id);
+    await expect(retryRejectedDelivery({ ...bindings(), OWNER_IG_SENDER_ID: '888' }, id, 'tiktok')).rejects.toThrow('delivery_retry_not_safe');
+    await env.DB.prepare('UPDATE jobs SET source_json=?').bind(JSON.stringify({ ...input, timestamp: Date.now() - 49 * 3600_000 })).run();
+    await expect(retryRejectedDelivery(bindings(), id, 'tiktok')).rejects.toThrow('delivery_retry_not_safe');
+    await env.DB.prepare('UPDATE jobs SET source_json=?').bind(JSON.stringify(input)).run();
+    socialMock();
+    vi.spyOn(BufferClient.prototype, 'post').mockResolvedValue({ id: 'post-ig', status: 'error', schedulingType: 'automatic' });
+    await expect(retryRejectedDelivery(bindings(), id, 'tiktok')).rejects.toThrow('delivery_retry_not_safe');
+    expect(await env.DB.prepare("SELECT state FROM deliveries WHERE service='tiktok'").first('state')).toBe('failed');
   });
   it('requires two distinct IDs and keeps publishing closed during partial setup', async () => {
     expect(() => approvedSenders({ ...bindings(), FRIEND_IG_SENDER_ID: '111' })).toThrow('invalid_sender_allowlist');
@@ -149,6 +205,15 @@ describe('independent, one-time sender setup proofs', () => {
 });
 
 describe('Arabic captions, Buffer identity and secret protection', () => {
+  it.each([
+    ['Video could not be read from its URL https://secret.example/PRIVATE_TOKEN_DO_NOT_LOG', 'buffer_create_rejected_media'],
+    ['Too many hashtags PRIVATE_TOKEN_DO_NOT_LOG', 'buffer_create_rejected_hashtags'],
+  ])('reports a fixed rejection reason without echoed contents', async (message, code) => {
+    const logger = vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ data: { createPost: { __typename: 'InvalidInputError', message } } }));
+    await expect(new BufferClient(bindings()).publish('tt', 'tiktok', 'caption', 'https://worker.example/media')).rejects.toThrow(code);
+    expect(JSON.stringify(logger.mock.calls)).not.toContain('PRIVATE_TOKEN_DO_NOT_LOG');
+  });
   it('generates stable short colloquial Arabic captions with appropriate hashtags', async () => {
     const captions = await Promise.all(Array.from({ length: 24 }, (_, i) => createCaption('job-' + i)));
     expect(new Set(captions).size).toBeGreaterThan(3);
