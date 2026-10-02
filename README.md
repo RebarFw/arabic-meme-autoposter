@@ -17,13 +17,13 @@ The Buffer API key exposes exactly this connected pair. Both IDs and usernames a
 
 An approved person shares a Reel in a separate 1-to-1 Instagram DM to the meme account. A minute cron polls the two exact sender-filtered conversations through Meta's Instagram Login API. It rechecks sender ID, recipient, timestamp and Reel format, commits permanent dedupe records, downloads a validated MP4 into private R2 and requests immediate automatic Buffer posts. It confirms both posts are `sent`, deletes the R2 object and revokes its temporary URL. The PC can be off.
 
-The Meta app remains unpublished. Webhook signature validation and GET verification are retained, but only polling ingests publishing jobs in this configuration. No App Review, publication or group chat integration is performed.
+The user approved publishing the Arabic Meta app on October 2, 2026, and its dashboard now reports Published. Webhook signature validation and GET verification are retained, but only polling ingests publishing jobs in this configuration. No App Review or group chat integration was performed.
 
-Live DM visibility is still unresolved. Dashboard inspection on October 2, 2026 confirmed that the working English app is Published, while Arabic is Unpublished; the Arabic receiver's credentials and messaging grant match its dashboard. Any publication requires the user's explicit approval. Two-sender enrollment and real social posting remain unverified; see [installation evidence](docs/testing.md).
+Publishing resolved live DM visibility: the same installed receiver token immediately returned conversation data. Both separate setup DMs were read through Meta, and their two distinct sender IDs were securely installed. Polling is active. The real social posting test remains pending; see [installation evidence](docs/testing.md).
 
 ### Two-person authorization
 
-`@avexiro0` is the only connected Instagram account, DM receiver and Instagram posting destination; TikTok posting also targets `@avexiro0`. `@rebarfw` and Michel karkoush are DM senders only. If Meta tester authorization is needed while the app is unpublished, it is limited to exposing those senders' DMs. Sender enrollment never adds a Buffer channel or connects a sender as a posting account.
+`@avexiro0` is the only connected Instagram account, DM receiver and Instagram posting destination; TikTok posting also targets `@avexiro0`. `@rebarfw` and Michel karkoush are DM senders only. The owner's DM proof succeeded without accepting a sender tester invitation. Sender enrollment never adds a Buffer channel or connects a sender as a posting account.
 
 Only `OWNER_IG_SENDER_ID` and `FRIEND_IG_SENDER_ID` are allowed. **Publishing stays closed until both are installed and distinct.** Usernames and display names never authorize publishing.
 
