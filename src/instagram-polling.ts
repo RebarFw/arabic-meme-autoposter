@@ -3,7 +3,7 @@ import { evidence, inspect } from './meta-diagnostics';
 import { reelUrl } from './security';
 import { enqueue, processJob, settings } from './jobs';
 import { sha256 } from './security';
-import { AppError, errorCode, log, type Env } from './types';
+import { AppError, errorCode, log, type Env, type ReelSource } from './types';
 import { cloudflareCapacity } from './cloudflare-usage';
 import { approvedSenders, sendersReady } from './senders';
 
@@ -72,7 +72,7 @@ async function validateConversation(env: Env, sender: string) {
   };
 }
 
-export async function pollInstagram(env: Env): Promise<void> {
+export async function pollInstagram(env: Env, options: { maxSenders?: number; maxMessages?: number; processJobs?: boolean; enqueueSource?: (source: ReelSource) => Promise<string> } = {}): Promise<void> {
   if (env.INGEST_MODE !== 'polling') return;
   if (!(await cloudflareCapacity(env)).allowed) return;
   await initializePolling(env);
@@ -94,7 +94,7 @@ export async function pollInstagram(env: Env): Promise<void> {
   const jobIds: string[] = [];
   try {
     const allowlist = approvedSenders(env);
-    const ordered = state.nextSender === 1 ? [...allowlist].reverse() : allowlist;
+    const ordered = (state.nextSender === 1 ? [...allowlist].reverse() : allowlist).slice(0, options.maxSenders ?? 2);
     const conversations = [];
     const conversationIds = new Set<string>();
     for (const sender of ordered) {
@@ -122,13 +122,13 @@ export async function pollInstagram(env: Env): Promise<void> {
         const messageId = apiId(entry.id)!;
         const hash = await sha256(messageId);
         if (seen.has(hash)) continue;
-        if (inspected >= 6) { bounded = true; break; }
+        if (inspected >= (options.maxMessages ?? 6)) { bounded = true; break; }
         if (conversationReads >= 3) break;
         const message = await apiMessage(env, messageId, true);
         conversationReads++;
         inspected++;
         const sources = parseApiMessage(message, allowlist, recipients, state.startedAt, now);
-        for (const source of sources) { jobIds.push(await enqueue(env, source)); received++; }
+        for (const source of sources) { jobIds.push(await (options.enqueueSource ? options.enqueueSource(source) : enqueue(env, source))); received++; }
         // Persist only after jobs are durable. A failure before this save
         // simply repeats idempotent INSERT OR IGNORE on the next invocation.
         seen.add(hash);
@@ -146,5 +146,5 @@ export async function pollInstagram(env: Env): Promise<void> {
     await env.DB.prepare("UPDATE settings SET value=? WHERE key='instagram_poll' AND json_extract(value,'$.leaseToken')=?").bind(JSON.stringify(updated), lease).run();
     log('instagram_poll_failed', { code });
   }
-  for (const id of [...new Set(jobIds)]) await processJob(env, id);
+  if (options.processJobs !== false) for (const id of [...new Set(jobIds)]) await processJob(env, id);
 }

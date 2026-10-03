@@ -141,10 +141,20 @@ it('does not ingest or alter publishing jobs during a pause, keeps health workin
   const fetcher = mockUsage({ writes: CF_STOP.rowsWritten });
   await expect(enqueue(bindings, { messageId: 'quota-new-message', senderId: '111', recipientId: '222', timestamp: Date.now(), kind: 'reel' })).rejects.toThrow('cloudflare_d1_writes_daily_pause');
   expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM jobs WHERE source_json LIKE '%quota-new-message%'").first('n')).toBe(0);
+  const usage = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation(async (input, init) => {
+    if (String(input).startsWith('https://worker.example/')) {
+      const taskContext = createExecutionContext();
+      const response = await worker.fetch(new Request(String(input), init), bindings, taskContext);
+      await waitOnExecutionContext(taskContext);
+      return response;
+    }
+    return usage(input, init);
+  });
   const ctx = createExecutionContext();
   worker.scheduled({} as ScheduledController, bindings, ctx);
   await waitOnExecutionContext(ctx);
-  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(fetcher).toHaveBeenCalledTimes(2);
   for (const route of ['usage', 'validate', 'probe']) {
     const response = await worker.fetch(new Request('https://worker.example/admin/cloudflare/' + route, { method: route === 'probe' ? 'POST' : 'GET' }), bindings, ctx);
     expect(response.status).toBe(401);

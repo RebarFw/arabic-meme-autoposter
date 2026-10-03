@@ -8,6 +8,7 @@ import { normalizeMetaAppSecret, secureUrl, validSignature } from '../src/securi
 import { storeVideo } from '../src/media';
 import { BufferClient } from '../src/buffer';
 import { downloadVideo } from '../src/downloaders';
+import { videoAt } from '../src/video-downloader';
 import type { Channel, Delivery, Env, Job, ReelSource } from '../src/types';
 
 const base = 'https://worker.example';
@@ -148,6 +149,28 @@ describe('persistent jobs and media', () => {
     await expect(storeVideo(configured(),new Response(mp4,{headers:{'Content-Type':'video/mp4','Content-Length':'999999999'}}),'bad',Date.now())).rejects.toThrow('video_size');
     await expect(storeVideo(configured(),new Response('abcdefghijkl',{headers:{'Content-Type':'video/mp4','Content-Length':'12'}}),'bad',Date.now())).rejects.toThrow('video_signature');
     expect(await env.MEDIA.head('bad')).toBeNull();
+  });
+  it('pipes a validated video natively and deletes any truncated or overflowing upload', async () => {
+    for (const length of [mp4.length, mp4.length - 1, mp4.length + 1]) {
+      let offset = 0;
+      const body = new ReadableStream<Uint8Array>({ pull(controller) {
+        if (offset >= length) { controller.close(); return; }
+        const count = Math.min(12, length - offset);
+        const chunk = new Uint8Array(count); chunk.set(mp4.subarray(offset, offset + count));
+        offset += count; controller.enqueue(chunk);
+      } });
+      const fetcher = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(body, { headers: { 'Content-Type': 'video/mp4', 'Content-Length': String(mp4.length) } }));
+      const video = await videoAt('https://lookaside.fbsbx.com/clip.mp4', ['fbsbx.com'], 'test', configured());
+      const key = 'arabic-meme-autoposter/native-' + length + '.mp4';
+      if (length === mp4.length) {
+        await storeVideo(configured(), video.response, key, Date.now() + 60000);
+        expect(new Uint8Array(await (await env.MEDIA.get(key))!.arrayBuffer())).toEqual(mp4);
+      } else {
+        await expect(storeVideo(configured(), video.response, key, Date.now() + 60000)).rejects.toThrow(length < mp4.length ? 'video_length_mismatch' : 'video_too_large');
+        expect(await env.MEDIA.head(key)).toBeNull();
+      }
+      fetcher.mockRestore();
+    }
   });
   it('publishes both channels with shareNow only once despite duplicate webhook deliveries', async () => {
     let creates = 0;

@@ -88,12 +88,15 @@ async function apiSnapshot(env: Env): Promise<{ snapshot: Snapshot; operations: 
   return { snapshot: { checkedAt: now, day: today, workers, rowsRead: reads, rowsWritten: writes, d1Bytes, databaseBytes, r2Bytes }, operations };
 }
 
-export async function refreshCloudflareUsage(env: Env, force = false): Promise<void> {
+export async function refreshCloudflareUsage(env: Env, force = false): Promise<Snapshot | undefined> {
   if (!enabled(env)) return;
   const now = Date.now();
   const state = await env.DB.prepare('SELECT * FROM cloudflare_usage_state WHERE id=1').first<State>();
   if (!state) throw new AppError('cloudflare_usage_schema_missing');
-  if (!force && state.snapshot_json && now - state.refreshed_at < CACHE_MS && JSON.parse(state.snapshot_json).day === date(now)) return;
+  if (!force && state.snapshot_json && now - state.refreshed_at < CACHE_MS && JSON.parse(state.snapshot_json).day === date(now)) {
+    if (state.last_error_code) throw new AppError('cloudflare_usage_stale');
+    return JSON.parse(state.snapshot_json) as Snapshot;
+  }
   const lease = await env.DB.prepare('UPDATE cloudflare_usage_state SET lease_until=? WHERE id=1 AND lease_until<=? RETURNING id').bind(now + 30_000, now).first();
   if (!lease) throw new AppError('cloudflare_usage_refresh_busy', true);
   try {
@@ -106,6 +109,7 @@ export async function refreshCloudflareUsage(env: Env, force = false): Promise<v
       WHERE excluded.workers>workers OR excluded.rows_read>rows_read OR excluded.rows_written>rows_written`).bind(snapshot.day, snapshot.workers, snapshot.rowsRead, snapshot.rowsWritten));
     statements.push(env.DB.prepare('UPDATE cloudflare_usage_state SET snapshot_json=?,refreshed_at=?,lease_until=0,last_error_code=NULL WHERE id=1').bind(JSON.stringify(snapshot), now));
     await env.DB.batch(statements);
+    return snapshot;
   } catch (error) {
     await env.DB.prepare('UPDATE cloudflare_usage_state SET lease_until=0,last_error_code=? WHERE id=1').bind(errorCode(error)).run();
     throw error;
@@ -113,24 +117,22 @@ export async function refreshCloudflareUsage(env: Env, force = false): Promise<v
 }
 
 async function snapshot(env: Env): Promise<Snapshot> {
-  await refreshCloudflareUsage(env);
-  const state = await env.DB.prepare('SELECT * FROM cloudflare_usage_state WHERE id=1').first<State>();
-  if (!state?.snapshot_json || Date.now() - state.refreshed_at > CACHE_MS || state.last_error_code) throw new AppError('cloudflare_usage_stale');
-  const data: Snapshot = JSON.parse(state.snapshot_json);
-  if (data.day !== date()) throw new AppError('cloudflare_usage_stale');
+  const data = await refreshCloudflareUsage(env);
+  if (!data || Date.now() - data.checkedAt > CACHE_MS || data.day !== date()) throw new AppError('cloudflare_usage_stale');
   return data;
-}
-async function r2Totals(env: Env) {
-  return (await env.DB.prepare(`SELECT COALESCE(SUM(MAX(base_a+own_a,reported_a)),0) AS a,COALESCE(SUM(MAX(base_b+own_b,reported_b)),0) AS b
-    FROM cloudflare_r2_daily WHERE day>=?`).bind(date(Date.now() - 31 * DAY)).first<{ a: number; b: number }>())!;
 }
 
 export async function cloudflareCapacity(env: Env) {
   if (!enabled(env)) return { enabled: false, allowed: true, code: null as string | null };
   const data = await snapshot(env);
-  const daily = (await env.DB.prepare('SELECT * FROM cloudflare_usage_daily WHERE day=?').bind(data.day).first<Daily>())!;
-  const r2 = await r2Totals(env);
-  const reservedBytes = await env.DB.prepare('SELECT COALESCE(SUM(bytes),0) AS n FROM cloudflare_media_reservations').first<number>('n') ?? 0;
+  // Read all current counters in one database snapshot rather than three
+  // separate round trips. Reservations and sticky stops remain authoritative.
+  const daily = await env.DB.prepare(`SELECT daily.*,r2.a,r2.b,media.bytes AS reserved_bytes FROM cloudflare_usage_daily AS daily
+    CROSS JOIN (SELECT COALESCE(SUM(MAX(base_a+own_a,reported_a)),0) AS a,COALESCE(SUM(MAX(base_b+own_b,reported_b)),0) AS b FROM cloudflare_r2_daily WHERE day>=?) AS r2
+    CROSS JOIN (SELECT COALESCE(SUM(bytes),0) AS bytes FROM cloudflare_media_reservations) AS media WHERE daily.day=?`)
+    .bind(date(Date.now() - 31 * DAY), data.day).first<Daily & { a: number; b: number; reserved_bytes: number }>();
+  if (!daily) throw new AppError('cloudflare_usage_schema_missing');
+  const r2 = { a: daily.a, b: daily.b }, reservedBytes = daily.reserved_bytes;
   // Room for work already in flight; these are projections, not a claim of an
   // exact billing meter. R2 calls additionally require atomic reservations.
   let code = daily.blocked ? daily.stop_code : daily.workers + 10 >= CF_STOP.workers ? 'cloudflare_workers_daily_pause' :

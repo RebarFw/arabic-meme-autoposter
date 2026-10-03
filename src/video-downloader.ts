@@ -2,6 +2,12 @@ import { AppError, type Env, type ReelSource } from './types';
 import { safeFetch } from './security';
 
 export interface DownloadedVideo { response: Response; provider: string; caption?: string }
+const signatureVerified = new WeakMap<Response, number>();
+export function hasVerifiedMp4Signature(response: Response): boolean { return signatureVerified.get(response) === Number(response.headers.get('content-length')); }
+export function videoStreamError(error: unknown): unknown {
+  return error instanceof Error && /FixedLengthStream|too (?:many|few) bytes/i.test(error.message)
+    ? new AppError(/too many|exceed/i.test(error.message) ? 'video_too_large' : 'video_length_mismatch') : error;
+}
 export interface VideoDownloader {
   readonly name: string;
   supports(source: ReelSource, env: Env): boolean;
@@ -44,16 +50,21 @@ export async function videoAt(url: string, hosts: string[], provider: string, en
     for (const chunk of initial) { const part = chunk.subarray(0, 12 - offset); prefix.set(part, offset); offset += part.length; }
     if (new TextDecoder().decode(prefix.subarray(4, 8)) !== 'ftyp') throw new AppError('video_signature_invalid');
   } catch (error) { await reader.cancel().catch(() => {}); throw error; }
-  let queued = 0;
-  const body = new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      try {
-        if (queued < initial.length) { controller.enqueue(initial[queued++]!); return; }
-        const next = await reader.read();
-        if (next.done) controller.close(); else controller.enqueue(next.value);
-      } catch (error) { controller.error(error); await reader.cancel().catch(() => {}); }
-    },
-    cancel(reason) { return reader.cancel(reason); },
-  });
-  return { provider, response: new Response(body, { status: response.status, headers: response.headers }) };
+  const stream = new FixedLengthStream(length);
+  const writer = stream.writable.getWriter();
+  // Only inspect the MP4 prefix in JavaScript; native pipeTo transfers the
+  // remaining video without a JavaScript callback for every network chunk.
+  void (async () => {
+    try {
+      for (const chunk of initial) await writer.write(chunk);
+      writer.releaseLock(); reader.releaseLock();
+      await response.body!.pipeTo(stream.writable);
+    } catch (error) {
+      await reader.cancel(error).catch(() => {});
+      await stream.writable.abort(error).catch(() => {});
+    }
+  })();
+  const verified = new Response(stream.readable, { status: response.status, headers: response.headers });
+  signatureVerified.set(verified, length);
+  return { provider, response: verified };
 }

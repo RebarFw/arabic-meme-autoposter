@@ -140,6 +140,9 @@ export async function downloadVideo(source: ReelSource, env: Env, jobId: string,
   let missingCaption = false;
   for (const provider of [...providers, ...configuredThirdPartyProviders(env)]) {
     if (!provider.supports(source, env)) continue;
+    // These providers cannot supply an original caption. Avoid parsing a large
+    // public HTML page or downloading a video that publishing must discard.
+    if (requireCaption && (provider.name === 'instagram-public-page' || typeof source.title !== 'string' && provider.name === 'meta-attachment')) { missingCaption ||= typeof source.title !== 'string'; continue; }
     if (signal.aborted) throw new AppError('downloader_deadline_exceeded', true);
     try {
       const video = await provider.download(source, env, signal);

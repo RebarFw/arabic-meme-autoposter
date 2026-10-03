@@ -1,12 +1,21 @@
 import { AppError, type Env, type Job } from './types';
 import { constantTimeEqual } from './security';
 import { reserveCloudflareMedia } from './cloudflare-usage';
+import { hasVerifiedMp4Signature, videoStreamError } from './video-downloader';
 
 export async function storeVideo(env: Env, response: Response, key: string, expiresAt: number): Promise<number> {
   const max = Math.min(Number(env.MAX_VIDEO_BYTES) || 26_214_400, 100_000_000);
   const length = Number(response.headers.get('content-length'));
   if (!Number.isSafeInteger(length) || length < 12 || length > max || !response.body || response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() !== 'video/mp4' || response.headers.get('content-encoding')) {
     await response.body?.cancel(); throw new AppError('video_size_or_type_invalid');
+  }
+  if (hasVerifiedMp4Signature(response)) {
+    try { await reserveCloudflareMedia(env, key, length, expiresAt); }
+    catch (error) { await response.body.cancel().catch(() => {}); throw error; }
+    try {
+      await env.MEDIA.put(key, response.body, { httpMetadata: { contentType: 'video/mp4', cacheControl: 'private, no-store' }, customMetadata: { expiresAt: String(expiresAt) } });
+    } catch (error) { await response.body.cancel(error).catch(() => {}); await env.MEDIA.delete(key); throw videoStreamError(error); }
+    return length;
   }
   const reader = response.body.getReader();
   const initial: Uint8Array[] = [];
@@ -42,27 +51,23 @@ export async function storeVideo(env: Env, response: Response, key: string, expi
     throw error;
   });
   const pump = (async () => {
-    let size = initialSize;
     try {
       for (const chunk of initial) await writer.write(chunk);
-      while (true) {
-        const next = await reader.read();
-        if (next.done) break;
-        size += next.value.byteLength;
-        if (size > length || size > max) throw new AppError('video_too_large');
-        await writer.write(next.value);
-      }
-      if (size !== length) throw new AppError('video_length_mismatch');
-      await writer.close();
+      writer.releaseLock(); reader.releaseLock();
+      // FixedLengthStream enforces the exact validated length natively.
+      await response.body!.pipeTo(stream.writable);
     } catch (error) {
-      await writer.abort(error).catch(() => {});
+      await stream.writable.abort(error).catch(() => {});
       await reader.cancel().catch(() => {});
       throw error;
     }
   })();
   const results = await Promise.allSettled([upload, pump]);
   const failure = results.find(r => r.status === 'rejected');
-  if (failure?.status === 'rejected') { await env.MEDIA.delete(key); throw failure.reason; }
+  if (failure?.status === 'rejected') {
+    await env.MEDIA.delete(key);
+    throw videoStreamError(failure.reason);
+  }
   return length;
 }
 

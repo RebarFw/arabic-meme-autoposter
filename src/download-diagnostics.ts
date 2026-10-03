@@ -1,5 +1,6 @@
 import { limitedBytes, META_MEDIA_HOSTS, reelUrl, secureUrl } from './security';
 import { AppError, errorCode, type Env, type ReelSource } from './types';
+import { videoStreamError } from './video-downloader';
 import { ApifyVideoDownloader, configuredThirdPartyProviders, PUBLIC_PAGE_HEADERS } from './downloaders';
 import { SiteResponseError } from './downloader-providers/shared';
 import { senderAllowed } from './senders';
@@ -48,7 +49,7 @@ export async function probeApifyDownload(env: Env) {
       if (bytes !== length) throw new AppError('video_length_mismatch');
     } catch (error) { await reader.cancel().catch(() => {}); throw error; }
     return { provider: provider.name, resolved: true, contentType: 'video/mp4', bytes, mp4SignatureVerified: true, fullDownloadVerified: true };
-  } catch (error) { return { provider: provider.name, resolved: false, code: errorCode(error) }; }
+  } catch (error) { return { provider: provider.name, resolved: false, code: errorCode(videoStreamError(error)) }; }
 }
 
 function urlFacts(raw: string) {

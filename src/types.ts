@@ -81,6 +81,7 @@ export interface Delivery {
   post_id: string | null;
   post_status: string | null;
   error_code: string | null;
+  updated_at?: number;
 }
 
 export class AppError extends Error {

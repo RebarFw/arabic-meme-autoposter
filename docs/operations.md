@@ -42,6 +42,14 @@ An independent R2 lifecycle rule expires this prefix after two days as protectio
 
 ## Configuration changes
 
+### Free-plan CPU recovery
+
+Cloudflare's Free plan has a 10 ms CPU limit per scheduled or HTTP invocation. A scheduled run terminated with `exceededCpu` on 2026-10-03 while its polling lease was active. The scheduler now makes authenticated public HTTP calls to the same cloud Worker: one account-usage refresh, one bounded polling task, one maintenance task, then separate download, per-channel publish and per-channel reconciliation tasks for up to three due jobs. A relevant DM is durably enqueued in another authenticated invocation before polling marks it seen. `global_fetch_strictly_public` routes these requests back through Cloudflare. Redirects are rejected, and each task endpoint requires the admin secret.
+
+Polling examines one approved sender and at most one new message per minute, alternating the two senders. Durable jobs, polling leases and permanent tombstones survive interrupted invocations. A failed poll does not prevent existing jobs from progressing. Both automatic `sent` statuses are still required before private media is deleted. Publishing skips the large public-page HTML parser and uses the existing guarded metadata providers. Native stream piping transfers MP4 data while retaining signature validation, exact-length enforcement and quota reservations.
+
+Idle operation uses about four Worker invocations per minute (5,760/day); active job stages add bounded requests. All calls count toward account-wide usage. Existing Cloudflare and Apify guards remain enabled; the change does not modify subscriptions, increase paid limits, or require a PC service. CPU measurements must still be checked on the deployed Worker, because local tests do not enforce the production CPU budget.
+
 Non-secret vars live in `wrangler.jsonc`; secrets belong in `wrangler secret put`. After redeploying, run `npm run setup` to refresh channel/account discovery if connections or access tokens changed. Existing jobs keep their per-channel IDs. The local generated admin token and verification token stay in `.secrets/`; replacing them revokes old values after uploading the new Worker secret. Secrets are never committed.
 
 Do not rotate/delete the database to clear failures: permanent message tombstones prevent old webhook retries from posting duplicates. Back up the database before schema changes. The R2 bucket should keep public access disabled; no `r2.dev` URL is necessary.
