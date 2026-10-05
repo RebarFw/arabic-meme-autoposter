@@ -18,6 +18,7 @@ export interface Env {
   CLOUDFLARE_ACCOUNT_ID?: string;
   CLOUDFLARE_DATABASE_ID?: string;
   DOWNLOADER_PROVIDER?: 'apify';
+  APIFY_ASYNC_DOWNLOADS?: string;
   DOWNLOADER_API_URL?: string;
   DOWNLOADER_MEDIA_HOSTS?: string;
   THIRD_PARTY_DOWNLOADER_PROVIDERS?: string;
@@ -86,6 +87,10 @@ export interface Delivery {
 
 export class AppError extends Error {
   constructor(public code: string, public retryable = false) { super(code); }
+}
+
+export class DownloadDeferred extends AppError {
+  constructor(code: string, public retryAt: number) { super(code, true); }
 }
 
 export function errorCode(error: unknown): string {

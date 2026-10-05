@@ -42,6 +42,14 @@ An independent R2 lifecycle rule expires this prefix after two days as protectio
 
 ## Configuration changes
 
+### Slow downloader recovery
+
+The production `APIFY_ASYNC_DOWNLOADS=true` path starts a capped asynchronous Actor run with a 600-second timeout and persists its run/dataset IDs under `apify_download:<job hash>`. Minute cloud tasks poll that same run, so waiting no longer consumes the five ordinary download-failure attempts or spends more credits starting another run. Terminal failures retry after 15 minutes and then two hours, with at most three starts per Reel and at most four recent in-flight starts. Every start still requires the Free-plan check, the existing $0.0073 per-run ceiling, $4.50 credit cutoff, and 500-run ceiling. Paid add-ons remain disabled.
+
+An interrupted or uncertain start is reconciled against this Actor's recent runs, exact Reel input, timestamp and capped options before continuing. Ambiguous matches stop for attention rather than starting another scrape. Expired run references are deleted after the original 48-hour source window. No new Cloudflare service or PC process is required.
+
+The 2026-10-05 incident was five 60-second `TIMED-OUT` runs with empty datasets. The old `source_caption_unavailable` summary masked those provider failures merely because a captionless public-page provider had been skipped. The downloader now preserves the concrete Apify failure; it still blocks genuinely missing captions and never invents copy. The 25 MiB MP4 cap, sender allowlist and permanent posting reservations remain unchanged.
+
 ### Free-plan CPU recovery
 
 Cloudflare's Free plan has a 10 ms CPU limit per scheduled or HTTP invocation. A scheduled run terminated with `exceededCpu` on 2026-10-03 while its polling lease was active. The scheduler now makes authenticated public HTTP calls to the same cloud Worker: one account-usage refresh, one bounded polling task, one maintenance task, then separate download, per-channel publish and per-channel reconciliation tasks for up to three due jobs. A relevant DM is durably enqueued in another authenticated invocation before polling marks it seen. `global_fetch_strictly_public` routes these requests back through Cloudflare. Redirects are rejected, and each task endpoint requires the admin secret.

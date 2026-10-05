@@ -1,5 +1,15 @@
 # Arabic test and installation evidence
 
+## Slow downloader recovery — 2026-10-05
+
+The friend's latest share matched the already-queued Reel. Its five original Apify runs all ended `TIMED-OUT` at 60 seconds with empty datasets, while the Worker misleadingly stored `source_caption_unavailable`. Production now persists one asynchronous run and resumes it through short cloud tasks. Waiting is deferred without consuming ordinary job-failure attempts; terminal run retries are delayed and capped at three starts. The existing Free-plan checks, $0.0073 per-run ceiling, $4.50 stop, 500-run ceiling, original-caption policy, 25 MiB cap and posting reservations are retained.
+
+The recovered run succeeded in 83.59 seconds, using $0.0036 of included Apify credits. The 4,576,865-byte MP4 then reached both destinations with actual `sent` statuses. D1 marked the original job completed and cleared its media capability; no duplicate job was created. Production Worker version `27df1468-cf43-4a0d-b7a8-c4787082ba41` passed health, Meta verification and admin authentication checks. Cloud task invocations completed successfully during the recovery.
+
+Lint, TypeScript, 158 Workers-runtime tests and nine deployment tests passed (167 total). New tests cover concurrent start deduplication, more than five pending polls without exhausted attempts, caption preservation and exactly-once posting, media deletion, delayed/capped terminal retries, ambiguous-start reconciliation, four-run concurrency throttling without another credit reservation, paid-plan rejection and correct timeout classification.
+
+## Earlier installation evidence
+
 Current evidence on 2026-10-02: the user-approved Arabic Meta app is Published, both distinct sender DM proofs are installed, and minute polling is active. Two real Reels have reached Instagram and TikTok @avexiro0, with all four automatic posts confirmed sent and both private R2 objects physically absent. The first TikTok post needed one guarded recovery; the second Reel completed automatically. A same-Reel share across the two senders retained the same two jobs and four post IDs. Lint, TypeScript, 130 Workers tests and nine deployment tests pass, 139 total. The user confirmed the live workflow works and declined further live sender testing.
 
 Reference source: RebarFw/meme-autoposter at c0fe3820b0f7a27d741b3bbb615bc683a53ae276. Its tests and adapters were ported. Original production posting evidence is not evidence for this Arabic installation.

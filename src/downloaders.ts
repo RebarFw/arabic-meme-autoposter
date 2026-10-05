@@ -1,4 +1,5 @@
-import { AppError, errorCode, log, type Env, type ReelSource } from './types';
+import { AppError, DownloadDeferred, errorCode, log, type Env, type ReelSource } from './types';
+import { asyncApifyItems } from './apify-download';
 import { limitedBytes, META_MEDIA_HOSTS, reelUrl, safeFetch, secureUrl } from './security';
 import { metaRequest } from './meta';
 import { downloadSignal, videoAt, type DownloadedVideo, type VideoDownloader } from './video-downloader';
@@ -92,7 +93,11 @@ export class ApiVideoDownloader implements VideoDownloader {
 export class ApifyVideoDownloader implements VideoDownloader {
   readonly name = 'apify-instagram-reel';
   supports(source: ReelSource, env: Env): boolean { return env.DOWNLOADER_PROVIDER === 'apify' && !!env.DOWNLOADER_API_KEY && !!reelUrl(source.reelUrl); }
-  async download(source: ReelSource, env: Env, parent?: AbortSignal): Promise<DownloadedVideo> {
+  async download(source: ReelSource, env: Env, parent?: AbortSignal, jobId?: string): Promise<DownloadedVideo> {
+    if (env.APIFY_ASYNC_DOWNLOADS === 'true' && jobId && /^[a-f0-9]{64}$/.test(jobId)) {
+      const items = await asyncApifyItems(source, env, jobId);
+      return this.fromItems(items, source, env, parent);
+    }
     const signal = downloadSignal(parent, 70_000);
     const url = reelUrl(source.reelUrl);
     if (!url || env.DOWNLOADER_PROVIDER !== 'apify' || !env.DOWNLOADER_API_KEY) throw new AppError('apify_not_configured');
@@ -114,6 +119,10 @@ export class ApifyVideoDownloader implements VideoDownloader {
     let items: unknown;
     try { items = JSON.parse(new TextDecoder().decode(await limitedBytes(response.body, 128_000))); }
     catch { throw new AppError('apify_invalid_response'); }
+    return this.fromItems(items, source, env, signal);
+  }
+  private async fromItems(items: unknown, source: ReelSource, env: Env, signal?: AbortSignal): Promise<DownloadedVideo> {
+    const url = reelUrl(source.reelUrl)!;
     if (!Array.isArray(items) || items.length !== 1) throw new AppError('apify_reel_not_found');
     const item = items[0];
     if (!item || typeof item !== 'object' || item.shortCode !== new URL(url).pathname.split('/')[2] || item.type !== 'Video' || item.productType !== 'clips' || typeof item.videoUrl !== 'string') throw new AppError('apify_result_not_requested_reel');
@@ -138,6 +147,8 @@ export async function downloadVideo(source: ReelSource, env: Env, jobId: string,
   const signal = downloadSignal(parent, 150_000);
   let retryable = false;
   let missingCaption = false;
+  let captionActuallyMissing = false;
+  let apifyFailure: AppError | undefined;
   for (const provider of [...providers, ...configuredThirdPartyProviders(env)]) {
     if (!provider.supports(source, env)) continue;
     // These providers cannot supply an original caption. Avoid parsing a large
@@ -145,19 +156,26 @@ export async function downloadVideo(source: ReelSource, env: Env, jobId: string,
     if (requireCaption && (provider.name === 'instagram-public-page' || typeof source.title !== 'string' && provider.name === 'meta-attachment')) { missingCaption ||= typeof source.title !== 'string'; continue; }
     if (signal.aborted) throw new AppError('downloader_deadline_exceeded', true);
     try {
-      const video = await provider.download(source, env, signal);
+      const video = await provider.download(source, env, signal, jobId);
       // A share's metadata title is a fallback, never the sender's DM text or
       // an Open Graph description containing creator names and engagement counts.
       const caption = video.caption ?? source.title;
       if (requireCaption && typeof caption !== 'string') {
         await video.response.body?.cancel();
         missingCaption = true;
+        captionActuallyMissing = true;
         log('downloader_failed', { job: jobId, provider: provider.name, code: 'source_caption_unavailable' });
         continue;
       }
       return { ...video, caption };
     }
-    catch (error) { retryable ||= error instanceof AppError && error.retryable; log('downloader_failed', { job: jobId, provider: provider.name, code: errorCode(error) }); }
+    catch (error) {
+      if (error instanceof DownloadDeferred) throw error;
+      if (provider.name === 'apify-instagram-reel' && error instanceof AppError) apifyFailure = error;
+      retryable ||= error instanceof AppError && error.retryable;
+      log('downloader_failed', { job: jobId, provider: provider.name, code: errorCode(error) });
+    }
   }
+  if (apifyFailure && !captionActuallyMissing) throw apifyFailure;
   throw new AppError(missingCaption ? 'source_caption_unavailable' : 'no_downloader_could_resolve_reel', missingCaption || retryable);
 }

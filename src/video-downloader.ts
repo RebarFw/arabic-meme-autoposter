@@ -11,7 +11,7 @@ export function videoStreamError(error: unknown): unknown {
 export interface VideoDownloader {
   readonly name: string;
   supports(source: ReelSource, env: Env): boolean;
-  download(source: ReelSource, env: Env, signal?: AbortSignal): Promise<DownloadedVideo>;
+  download(source: ReelSource, env: Env, signal?: AbortSignal, jobId?: string): Promise<DownloadedVideo>;
 }
 export function downloadSignal(parent: AbortSignal | undefined, milliseconds: number): AbortSignal {
   const own = AbortSignal.timeout(milliseconds);

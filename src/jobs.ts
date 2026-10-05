@@ -6,7 +6,7 @@ import { downloadVideo } from './downloaders';
 import { notifyOwner } from './meta';
 import { storeVideo, temporaryMediaUrl } from './media';
 import { META_MEDIA_HOSTS, reelUrl, secureUrl, sha256 } from './security';
-import { AppError, errorCode, log, type Channel, type Delivery, type Env, type Job, type ReelSource } from './types';
+import { AppError, DownloadDeferred, errorCode, log, type Channel, type Delivery, type Env, type Job, type ReelSource } from './types';
 
 export async function settings<T>(env: Env, key: string): Promise<T | null> {
   const result = await env.DB.prepare('SELECT value FROM settings WHERE key = ?').bind(key).first<{ value: string }>();
@@ -250,6 +250,14 @@ export async function processJob(env: Env, id: string, maxStages = 3, maxDeliver
       else await checkPosts(env, job, maxDeliveries);
     } catch (error) {
       const code = errorCode(error);
+      if (job.state === 'pending' && error instanceof DownloadDeferred) {
+        // Waiting on the same cloud run is not a failed download attempt. No
+        // R2 upload or external post exists at this point.
+        await env.DB.prepare('UPDATE jobs SET attempts=?,object_key=NULL,media_token=NULL,media_expires_at=NULL WHERE id=? AND lease_token=?').bind(job.attempts, job.id, job.lease_token).run();
+        await updateJob(env, job, 'pending', code, Math.max(60_000, error.retryAt - Date.now()));
+        log('download_deferred', { job: job.id, code });
+        return;
+      }
       if (code.startsWith('cloudflare_')) {
         // A concurrent quota reservation can stop a stage after its initial
         // capacity check. Preserve it for resumption and keep retry allowance.
@@ -273,6 +281,7 @@ export async function processJob(env: Env, id: string, maxStages = 3, maxDeliver
 export async function maintenance(env: Env, processJobs = true): Promise<string[]> {
   const now = Date.now();
   await env.DB.prepare("DELETE FROM settings WHERE key IN ('owner_setup','friend_setup') AND json_extract(value, '$.expiresAt')<=?").bind(now).run();
+  await env.DB.prepare("DELETE FROM settings WHERE key LIKE 'apify_download:%' AND json_extract(value,'$.expiresAt')<=?").bind(now).run();
   const expired = (await env.DB.prepare('SELECT * FROM jobs WHERE media_expires_at<=? AND object_key IS NOT NULL LIMIT 20').bind(now).all<Job>()).results;
   for (const job of expired) {
     await removeMedia(env, job);
