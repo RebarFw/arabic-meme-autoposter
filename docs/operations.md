@@ -42,13 +42,23 @@ An independent R2 lifecycle rule expires this prefix after two days as protectio
 
 ## Configuration changes
 
+### Missing media recovery (2026-10-25)
+
+Polling no longer consumes an approved empty message as successfully handled. It retries after 1 minute, 5 minutes, 15 minutes, 1 hour and then every 3 hours, bounded to 16 reads and the original 48-hour source window. Fresh messages are checked before deferred messages. `npm run status` reports pending/attention media counts and a fixed `meta_media_unavailable` code. No raw message bodies or missing URLs are stored in this retry state. Parser version 4 rechecks recent cached messages; existing posting tombstones still prevent duplicate creates.
+
+In polling mode, signed live webhook shares are now durably enqueued through the same authenticated cloud task as polled shares. The webhook waits for that enqueue before acknowledging; publishing remains in separate cron invocations. An empty subsequent Meta read is considered handled only if its permanent message tombstone already exists. Both ingress paths still require the exact installed sender IDs, recipient checks, valid timestamps, quota guards and the existing media validation. A configured callback with the `messages` subscription and a correct signing secret is required for real push delivery.
+
+Directly uploaded DM videos are supported with an empty caption. Reel caption preservation remains unchanged. Profile-prefixed `/USERNAME/reel/SHORTCODE/` links canonicalize to the existing Reel identity. Photos, stories, unsafe media hosts and ambiguous multiple videos are rejected. The 25 MiB MP4 limit remains in place; this change cannot recover media Meta withholds from both inputs or make platform-rejected videos publish successfully.
+
+The operator also explicitly selected uploading without a caption when a valid video is available but its original caption cannot be retrieved. `ALLOW_EMPTY_CAPTION_FALLBACK=true` enables that behavior and logs `caption_unavailable_publishing_empty`; original provider captions and titles still take precedence, and sender text is never used. The strict default remains available by setting the flag false. Apify's explicit `restricted_page` error is now retained as `instagram_media_restricted` when every fallback fails, rather than being obscured by a missing-caption summary.
+
 ### Slow downloader recovery
 
 The production `APIFY_ASYNC_DOWNLOADS=true` path starts a capped asynchronous Actor run with a 600-second timeout and persists its run/dataset IDs under `apify_download:<job hash>`. Minute cloud tasks poll that same run, so waiting no longer consumes the five ordinary download-failure attempts or spends more credits starting another run. Terminal failures retry after 15 minutes and then two hours, with at most three starts per Reel and at most four recent in-flight starts. Every start still requires the Free-plan check, the existing $0.0073 per-run ceiling, $4.50 credit cutoff, and 500-run ceiling. Paid add-ons remain disabled.
 
 An interrupted or uncertain start is reconciled against this Actor's recent runs, exact Reel input, timestamp and capped options before continuing. Ambiguous matches stop for attention rather than starting another scrape. Expired run references are deleted after the original 48-hour source window. No new Cloudflare service or PC process is required.
 
-The 2026-10-05 incident was five 60-second `TIMED-OUT` runs with empty datasets. The old `source_caption_unavailable` summary masked those provider failures merely because a captionless public-page provider had been skipped. The downloader now preserves the concrete Apify failure; it still blocks genuinely missing captions and never invents copy. The 25 MiB MP4 cap, sender allowlist and permanent posting reservations remain unchanged.
+The 2026-10-05 incident was five 60-second `TIMED-OUT` runs with empty datasets. The old `source_caption_unavailable` summary masked those provider failures merely because a captionless public-page provider had been skipped. The downloader now preserves the concrete Apify failure; strict mode still blocks missing captions; the operator-enabled fallback described above now permits an empty caption and never invents copy. The 25 MiB MP4 cap, sender allowlist and permanent posting reservations remain unchanged.
 
 ### Free-plan CPU recovery
 
@@ -62,4 +72,4 @@ Non-secret vars live in `wrangler.jsonc`; secrets belong in `wrangler secret put
 
 Do not rotate/delete the database to clear failures: permanent message tombstones prevent old webhook retries from posting duplicates. Back up the database before schema changes. The R2 bucket should keep public access disabled; no `r2.dev` URL is necessary.
 
-The operator authorized minute API polling on 2026-10-01 and explicitly approved Arabic Meta app publication on 2026-10-02. Publication made the receiver's conversations visible without credential replacement or sender tester acceptance. Do not make further app-mode changes or submit App Review as part of maintenance. Signed webhook requests remain authenticated and acknowledged in polling mode, with no posting jobs. A deliberate switch to webhook mode retains the same canonical recipient/message tombstones.
+The operator authorized minute API polling on 2026-10-01 and explicitly approved Arabic Meta app publication on 2026-10-02. Publication made the receiver's conversations visible without credential replacement or sender tester acceptance. Do not make further app-mode changes or submit App Review as part of maintenance. Signed webhook requests are authenticated and durably enqueued even in polling mode, using the same canonical recipient/message tombstones.

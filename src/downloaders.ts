@@ -20,7 +20,7 @@ export const PUBLIC_PAGE_HEADERS = {
 
 export class MetaAttachmentDownloader implements VideoDownloader {
   readonly name = 'meta-attachment';
-  supports(source: ReelSource): boolean { return !!source.attachmentUrl && source.kind === 'reel'; }
+  supports(source: ReelSource): boolean { return !!source.attachmentUrl && ['reel','video'].includes(source.kind); }
   async download(source: ReelSource, env?: Env, signal?: AbortSignal): Promise<DownloadedVideo> {
     return videoAt(source.attachmentUrl!, META_MEDIA_HOSTS, this.name, env, downloadSignal(signal, 25_000));
   }
@@ -104,7 +104,7 @@ export class ApifyVideoDownloader implements VideoDownloader {
     const token = env.DOWNLOADER_API_KEY.trim();
     if (!/^[A-Za-z0-9_-]{10,256}$/.test(token)) throw new AppError('invalid_downloader_key_format');
     await reserveApifyRun(env, signal);
-    const query = new URLSearchParams({ timeout: '60', maxTotalChargeUsd: String(APIFY_RUN_MAX_USD), maxItems: '1', limit: '1', clean: 'true', fields: 'shortCode,type,productType,videoUrl,caption' });
+    const query = new URLSearchParams({ timeout: '60', maxTotalChargeUsd: String(APIFY_RUN_MAX_USD), maxItems: '1', limit: '1', clean: 'true', fields: 'shortCode,type,productType,videoUrl,caption,error' });
     let response: Response;
     try {
       response = await fetch('https://api.apify.com/v2/actors/apify~instagram-reel-scraper/run-sync-get-dataset-items?' + query, {
@@ -125,6 +125,7 @@ export class ApifyVideoDownloader implements VideoDownloader {
     const url = reelUrl(source.reelUrl)!;
     if (!Array.isArray(items) || items.length !== 1) throw new AppError('apify_reel_not_found');
     const item = items[0];
+    if (item && typeof item === 'object' && item.error === 'restricted_page') throw new AppError('instagram_media_restricted');
     if (!item || typeof item !== 'object' || item.shortCode !== new URL(url).pathname.split('/')[2] || item.type !== 'Video' || item.productType !== 'clips' || typeof item.videoUrl !== 'string') throw new AppError('apify_result_not_requested_reel');
     // The key is sent only to Apify; media downloads never inherit its headers.
     return { ...await videoAt(item.videoUrl, META_MEDIA_HOSTS, this.name, env, signal), caption: typeof item.caption === 'string' ? item.caption : undefined };
@@ -149,11 +150,16 @@ export async function downloadVideo(source: ReelSource, env: Env, jobId: string,
   let missingCaption = false;
   let captionActuallyMissing = false;
   let apifyFailure: AppError | undefined;
-  for (const provider of [...providers, ...configuredThirdPartyProviders(env)]) {
+  const emptyFallback = requireCaption && env.ALLOW_EMPTY_CAPTION_FALLBACK === 'true';
+  // Caption-capable metadata providers get their normal chance first. Only
+  // then recover a bare Meta attachment when no original title was supplied.
+  const deferredAttachment = emptyFallback && typeof source.title !== 'string';
+  const chain = [...providers.filter(provider => !deferredAttachment || provider.name !== 'meta-attachment'), ...configuredThirdPartyProviders(env), ...(deferredAttachment ? [new MetaAttachmentDownloader()] : [])];
+  for (const provider of chain) {
     if (!provider.supports(source, env)) continue;
     // These providers cannot supply an original caption. Avoid parsing a large
     // public HTML page or downloading a video that publishing must discard.
-    if (requireCaption && (provider.name === 'instagram-public-page' || typeof source.title !== 'string' && provider.name === 'meta-attachment')) { missingCaption ||= typeof source.title !== 'string'; continue; }
+    if (requireCaption && (provider.name === 'instagram-public-page' || !emptyFallback && typeof source.title !== 'string' && provider.name === 'meta-attachment')) { missingCaption ||= typeof source.title !== 'string'; continue; }
     if (signal.aborted) throw new AppError('downloader_deadline_exceeded', true);
     try {
       const video = await provider.download(source, env, signal, jobId);
@@ -161,6 +167,12 @@ export async function downloadVideo(source: ReelSource, env: Env, jobId: string,
       // an Open Graph description containing creator names and engagement counts.
       const caption = video.caption ?? source.title;
       if (requireCaption && typeof caption !== 'string') {
+        // Explicitly enabled by the operator: a validated video can publish
+        // without a caption instead of being discarded. Never invent copy.
+        if (emptyFallback) {
+          log('caption_unavailable_publishing_empty', { job: jobId, provider: provider.name });
+          return { ...video, caption: '' };
+        }
         await video.response.body?.cancel();
         missingCaption = true;
         captionActuallyMissing = true;
@@ -176,6 +188,6 @@ export async function downloadVideo(source: ReelSource, env: Env, jobId: string,
       log('downloader_failed', { job: jobId, provider: provider.name, code: errorCode(error) });
     }
   }
-  if (apifyFailure && !captionActuallyMissing) throw apifyFailure;
+  if (apifyFailure && (!captionActuallyMissing || apifyFailure.code === 'instagram_media_restricted')) throw apifyFailure;
   throw new AppError(missingCaption ? 'source_caption_unavailable' : 'no_downloader_could_resolve_reel', missingCaption || retryable);
 }

@@ -38,7 +38,7 @@ export function reelUrl(raw: unknown): string | undefined {
   if (typeof raw !== 'string') return;
   try {
     const url = secureUrl(raw, ['instagram.com']);
-    const match = /^\/reels?\/([A-Za-z0-9_-]{5,80})\/?$/.exec(url.pathname);
+    const match = /^\/(?:[A-Za-z0-9_.]{1,30}\/)?reels?\/([A-Za-z0-9_-]{5,80})\/?$/.exec(url.pathname);
     if (!match) return;
     return `https://www.instagram.com/reel/${match[1]}/`;
   } catch { return; }

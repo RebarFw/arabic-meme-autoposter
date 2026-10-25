@@ -66,7 +66,7 @@ it('uses the real Apify Actor contract, caps costs and keeps the key away from m
       expect(url.searchParams.get('maxTotalChargeUsd')).toBe('0.0073');
       expect(url.searchParams.get('maxItems')).toBe('1');
       expect(url.searchParams.get('limit')).toBe('1');
-      expect(url.searchParams.get('fields')).toBe('shortCode,type,productType,videoUrl,caption');
+      expect(url.searchParams.get('fields')).toBe('shortCode,type,productType,videoUrl,caption,error');
       expect(url.searchParams.has('token')).toBe(false);
       expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer fake-apify-api-key');
       expect(JSON.parse(String(init?.body))).toEqual({ username: [apifySource.reelUrl], resultsLimit: 1, includeSharesCount: false, includeTranscript: false, includeDownloadedVideo: false });
@@ -77,6 +77,36 @@ it('uses the real Apify Actor contract, caps costs and keeps the key away from m
   });
   expect(await new ApifyVideoDownloader().download(apifySource, apifyBindings)).toMatchObject({provider:'apify-instagram-reel',caption:apifyItem.caption});
   expect(fetcher).toHaveBeenCalledTimes(5);
+});
+
+it('preserves an explicit restricted-page result instead of reporting a missing caption', async () => {
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+    const guard = apifyGuardResponse(input); if (guard) return guard;
+    return Response.json([{ error: 'restricted_page' }]);
+  });
+  await expect(downloadVideo({ ...apifySource, mediaId: undefined }, apifyBindings, 'job', undefined, true)).rejects.toMatchObject({ code: 'instagram_media_restricted' });
+});
+
+it('publishes validated fallback media without a caption only when explicitly enabled', async () => {
+  const configured: Env = { ...apifyBindings, ALLOW_EMPTY_CAPTION_FALLBACK: 'true', THIRD_PARTY_DOWNLOADER_PROVIDERS: 'videodropper' };
+  const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+    const guard = apifyGuardResponse(input); if (guard) return guard;
+    const url = new URL(String(input));
+    if (url.hostname === 'api.apify.com') return Response.json([{ error: 'restricted_page' }]);
+    if (url.hostname === 'api.videodropper.app') return Response.json({ video: [{ video: 'https://scontent.cdninstagram.com/clip.mp4' }] });
+    return video();
+  });
+  const result = await downloadVideo({ ...apifySource, mediaId: undefined }, configured, 'job', undefined, true);
+  expect(result).toMatchObject({ provider: 'videodropper', caption: '' });
+  await result.response.body?.cancel();
+  fetcher.mockImplementation(async input => {
+    const guard = apifyGuardResponse(input); if (guard) return guard;
+    if (String(input).includes('api.apify.com')) return Response.json([apifyItem]);
+    return video();
+  });
+  const original = await downloadVideo({ ...apifySource, mediaId: undefined }, configured, 'job', undefined, true);
+  expect(original.caption).toBe(apifyItem.caption);
+  await original.response.body?.cancel();
 });
 
 it('falls through a captionless MP4 to fetch the matching original caption in one guarded Apify run', async () => {

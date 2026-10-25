@@ -44,13 +44,19 @@ export function parseMessages(payload: unknown, owner: string | string[], recipi
       if (Array.isArray(message.attachments)) {
         for (const rawAttachment of message.attachments.slice(0, 10)) {
           const attachment = record(rawAttachment);
-          if (!['share','ig_post','ig_reel','reel'].includes(String(attachment.type))) continue;
+          if (!['share','ig_post','ig_reel','reel','video'].includes(String(attachment.type))) continue;
           const data = record(attachment.payload);
           const candidateId = id(data.ig_post_media_id ?? data.id);
           if (mediaId && candidateId && mediaId !== candidateId) { ambiguous = true; break; }
           mediaId ??= candidateId;
           if (typeof data.title === 'string') title = data.title;
           if (attachment.type === 'ig_reel' || attachment.type === 'reel') kind = 'reel';
+          // A directly uploaded DM video has no original Reel caption. Keep
+          // its caption empty rather than copying unrelated sender text.
+          if (attachment.type === 'video') {
+            if (reels.length || foundShare) { ambiguous = true; break; }
+            kind = 'video'; title = '';
+          }
           if (typeof data.url !== 'string') continue;
           const candidateReel = reelUrl(data.url);
           if (candidateReel) {

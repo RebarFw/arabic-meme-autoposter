@@ -36,6 +36,7 @@
     "INGEST_MODE": "polling",
     "DOWNLOADER_PROVIDER": "apify",
     "APIFY_ASYNC_DOWNLOADS": "true",
+    "ALLOW_EMPTY_CAPTION_FALLBACK": "true",
     "META_API_VERSION": "v26.0",
     "MAX_VIDEO_BYTES": "26214400",
     "MEDIA_TTL_SECONDS": "86400",

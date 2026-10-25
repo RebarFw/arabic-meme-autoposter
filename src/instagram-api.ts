@@ -26,7 +26,7 @@ export async function apiMessageList(env: Env, conversationId: string): Promise<
 }
 
 export async function apiMessage(env: Env, messageId: string, shares = false): Promise<ApiObject> {
-  const fields = 'id,created_time,from,to,message' + (shares ? ',shares{link,type,url,id,name}' : '');
+  const fields = 'id,created_time,from,to,message' + (shares ? ',is_unsupported,shares{link,type,url,id,name},attachments{file_url,video_data}' : '');
   return metaRequest<ApiObject>(env, `${encodeURIComponent(messageId)}?fields=${fields}`);
 }
 
@@ -44,6 +44,11 @@ export function parseApiMessage(message: ApiObject, owner: string | string[], re
     const payload = { url: share.url ?? link, ig_post_media_id: share.id, title: share.name };
     return [{ type, payload }, ...(link && share.url ? [{ type: 'share', payload: { ...payload, url: link } }] : [])];
   });
+  for (const attachment of apiItems(message.attachments)) {
+    const video = apiObject(attachment.video_data);
+    const url = video.url ?? attachment.file_url;
+    if (attachment.video_data && typeof url === 'string') attachments.push({ type: 'video', payload: { url, ig_post_media_id: undefined, title: '' } });
+  }
   const parsed = parseMessages({ object: 'instagram', entry: [{ id: recipient.id, messaging: [{
     sender: { id: sender.id }, recipient: { id: recipient.id }, timestamp,
     message: { mid: message.id, text: message.message, attachments },

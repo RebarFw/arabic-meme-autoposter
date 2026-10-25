@@ -21,10 +21,13 @@ interface PollState {
   inspected?: number;
   received?: number;
   nextSender?: number;
+  deferred?: Record<string, { attempts: number; nextAt: number; expiresAt: number }>;
 }
 // A parsing change rechecks the bounded recent IDs. Permanent D1 job tombstones
 // still prevent external posts from being created again for an existing DM.
-const POLL_FORMAT_VERSION = 3;
+const POLL_FORMAT_VERSION = 4;
+const MEDIA_RETRY_LIMIT = 16;
+const MEDIA_RETRY_DELAYS = [60_000, 300_000, 900_000, 3600_000, 3 * 3600_000];
 
 export async function initializePolling(env: Env): Promise<void> {
   if (env.INGEST_MODE !== 'polling' || !sendersReady(env)) return;
@@ -34,7 +37,12 @@ export async function initializePolling(env: Env): Promise<void> {
 
 export async function pollingStatus(env: Env) {
   const state = await settings<PollState>(env, 'instagram_poll');
-  return { mode: env.INGEST_MODE ?? 'webhook', initialized: !!state, startedAt: state?.startedAt, lastSuccessAt: state?.lastSuccessAt, nextAt: state?.nextAt, lastErrorCode: state?.lastErrorCode, inspected: state?.inspected ?? 0, received: state?.received ?? 0 };
+  const deferred = Object.values(state?.deferred ?? {});
+  return { mode: env.INGEST_MODE ?? 'webhook', initialized: !!state, startedAt: state?.startedAt, lastSuccessAt: state?.lastSuccessAt, nextAt: state?.nextAt, lastErrorCode: state?.lastErrorCode, inspected: state?.inspected ?? 0, received: state?.received ?? 0,
+    mediaPending: deferred.filter(item => item.attempts < MEDIA_RETRY_LIMIT && item.expiresAt > Date.now()).length,
+    mediaNeedsAttention: deferred.filter(item => item.attempts >= MEDIA_RETRY_LIMIT || item.expiresAt <= Date.now()).length,
+    mediaErrorCode: deferred.length ? 'meta_media_unavailable' : null,
+  };
 }
 
 export async function validatePolling(env: Env) {
@@ -89,6 +97,8 @@ export async function pollInstagram(env: Env, options: { maxSenders?: number; ma
   const state: PollState = JSON.parse(row.value);
   const seen = new Set(state.formatVersion === POLL_FORMAT_VERSION ? state.seen ?? [] : []);
   const versions = { ...state.versions };
+  // Retain only hashes/timing, never raw empty-message bodies or source URLs.
+  const deferred = Object.fromEntries(Object.entries(state.deferred ?? {}).filter(([, item]) => item.expiresAt > now - 48 * 3600_000).slice(-120));
   let inspected = 0;
   let received = 0;
   const jobIds: string[] = [];
@@ -114,14 +124,17 @@ export async function pollInstagram(env: Env, options: { maxSenders?: number; ma
       // can stay equal when another DM arrives during the previous scan.
       // Only unseen messages require a detail read, so quiet polling is two
       // small GETs per minute for the single approved conversation.
-      const messages = (await apiMessageList(env, id)).sort((a, b) => apiTimestamp(a.created_time) - apiTimestamp(b.created_time));
+      const messages = await Promise.all((await apiMessageList(env, id)).map(async entry => ({ entry, hash: await sha256(apiId(entry.id)!) })));
+      // Fresh messages must not wait behind an older share Meta has omitted.
+      messages.sort((a, b) => Number(!!deferred[a.hash]) - Number(!!deferred[b.hash]) || apiTimestamp(a.entry.created_time) - apiTimestamp(b.entry.created_time));
       let conversationReads = 0;
-      for (const entry of messages) {
+      for (const { entry, hash } of messages) {
         const timestamp = apiTimestamp(entry.created_time);
         if (!Number.isFinite(timestamp) || timestamp < Math.max(state.startedAt, now - 48 * 3600_000)) continue;
         const messageId = apiId(entry.id)!;
-        const hash = await sha256(messageId);
         if (seen.has(hash)) continue;
+        const retry = deferred[hash];
+        if (retry && (retry.nextAt > now || retry.attempts >= MEDIA_RETRY_LIMIT)) continue;
         if (inspected >= (options.maxMessages ?? 6)) { bounded = true; break; }
         if (conversationReads >= 3) break;
         const message = await apiMessage(env, messageId, true);
@@ -129,6 +142,18 @@ export async function pollInstagram(env: Env, options: { maxSenders?: number; ma
         inspected++;
         const sources = parseApiMessage(message, allowlist, recipients, state.startedAt, now);
         for (const source of sources) { jobIds.push(await (options.enqueueSource ? options.enqueueSource(source) : enqueue(env, source))); received++; }
+        const missingMedia = !sources.length && allowlist.includes(String(apiObject(message.from).id))
+          && apiItems(message.to).some(item => recipients.includes(String(item.id)))
+          && !(typeof message.message === 'string' && message.message.trim())
+          && !apiItems(message.shares).length && !apiItems(message.attachments).length;
+        const alreadyQueued = missingMedia && await env.DB.prepare('SELECT job_id FROM message_tombstones WHERE message_hash=?').bind(await sha256(`${recipients[0]}:${messageId}`)).first();
+        if (missingMedia && !alreadyQueued) {
+          const attempts = (retry?.attempts ?? 0) + 1;
+          deferred[hash] = { attempts, nextAt: now + MEDIA_RETRY_DELAYS[Math.min(attempts - 1, MEDIA_RETRY_DELAYS.length - 1)]!, expiresAt: timestamp + 48 * 3600_000 };
+          log('instagram_media_deferred', { code: 'meta_media_unavailable', attempts });
+          continue;
+        }
+        delete deferred[hash];
         // Persist only after jobs are durable. A failure before this save
         // simply repeats idempotent INSERT OR IGNORE on the next invocation.
         seen.add(hash);
@@ -136,13 +161,13 @@ export async function pollInstagram(env: Env, options: { maxSenders?: number; ma
       if (bounded) break;
       if (version) versions[key] = version;
     }
-    const updated: PollState = { ...state, nextSender: state.nextSender === 1 ? 0 : 1, formatVersion: POLL_FORMAT_VERSION, seen: [...seen].slice(-120), versions, leaseToken: null, leaseUntil: 0, nextAt: (Math.floor(now / 60_000) + 1) * 60_000, errors: 0, lastErrorCode: null, lastSuccessAt: Date.now(), inspected, received };
+    const updated: PollState = { ...state, nextSender: state.nextSender === 1 ? 0 : 1, formatVersion: POLL_FORMAT_VERSION, seen: [...seen].slice(-120), versions, deferred, leaseToken: null, leaseUntil: 0, nextAt: (Math.floor(now / 60_000) + 1) * 60_000, errors: 0, lastErrorCode: null, lastSuccessAt: Date.now(), inspected, received };
     await env.DB.prepare("UPDATE settings SET value=? WHERE key='instagram_poll' AND json_extract(value,'$.leaseToken')=?").bind(JSON.stringify(updated), lease).run();
     if (inspected || received) log('instagram_poll', { inspected, received });
   } catch (error) {
     const errors = Math.min((state.errors ?? 0) + 1, 6);
     const code = errorCode(error);
-    const updated: PollState = { ...state, formatVersion: POLL_FORMAT_VERSION, seen: [...seen].slice(-120), versions, leaseToken: null, leaseUntil: 0, nextAt: now + Math.min(3600_000, 60_000 * 2 ** errors), errors, lastErrorCode: code, inspected, received };
+    const updated: PollState = { ...state, formatVersion: POLL_FORMAT_VERSION, seen: [...seen].slice(-120), versions, deferred, leaseToken: null, leaseUntil: 0, nextAt: now + Math.min(3600_000, 60_000 * 2 ** errors), errors, lastErrorCode: code, inspected, received };
     await env.DB.prepare("UPDATE settings SET value=? WHERE key='instagram_poll' AND json_extract(value,'$.leaseToken')=?").bind(JSON.stringify(updated), lease).run();
     log('instagram_poll_failed', { code });
   }

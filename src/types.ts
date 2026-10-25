@@ -19,6 +19,7 @@ export interface Env {
   CLOUDFLARE_DATABASE_ID?: string;
   DOWNLOADER_PROVIDER?: 'apify';
   APIFY_ASYNC_DOWNLOADS?: string;
+  ALLOW_EMPTY_CAPTION_FALLBACK?: string;
   DOWNLOADER_API_URL?: string;
   DOWNLOADER_MEDIA_HOSTS?: string;
   THIRD_PARTY_DOWNLOADER_PROVIDERS?: string;
@@ -41,7 +42,7 @@ export interface ReelSource {
   attachmentUrl?: string;
   mediaId?: string;
   title?: string;
-  kind: 'reel' | 'shared-post';
+  kind: 'reel' | 'shared-post' | 'video';
 }
 
 export interface Job {

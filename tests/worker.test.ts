@@ -126,6 +126,17 @@ describe('Reel parsing and URL restrictions', () => {
     expect(parseMessages(payload('111',{attachments:[{type:'share',...attachment},{type:'ig_post',...attachment}]}),'111',['222'])).toHaveLength(1);
     expect(parseMessages(payload('111',{attachments:[{type:'ig_post',...attachment},{type:'ig_post',payload:{ig_post_media_id:'456',url:'https://lookaside.fbsbx.com/b'}}]}),'111',['222'])).toHaveLength(0);
   });
+  it('accepts a direct video from an approved sender while rejecting multiple videos and unsafe hosts', () => {
+    const video = { type: 'video', payload: { url: 'https://lookaside.fbsbx.com/upload.mp4' } };
+    expect(parseMessages(payload('111', { attachments: [video], text: 'not a caption' }), '111', ['222'])[0]).toMatchObject({ kind: 'video', title: '' });
+    expect(parseMessages(payload('stranger', { attachments: [video] }), '111', ['222'])).toEqual([]);
+    expect(parseMessages(payload('111', { attachments: [video, video] }), '111', ['222'])).toEqual([]);
+    expect(parseMessages(payload('111', { attachments: [{ type: 'video', payload: { url: 'https://evil.example/file.mp4' } }] }), '111', ['222'])).toEqual([]);
+  });
+  it('canonicalizes profile-prefixed Reel links to the same dedupe identity', () => {
+    const parsed = parseMessages(payload('111', { attachments: [], text: 'https://www.instagram.com/1m_1ir/reel/DefxI8vyYhs/' }), '111', ['222']);
+    expect(parsed[0]?.reelUrl).toBe('https://www.instagram.com/reel/DefxI8vyYhs/');
+  });
   it('blocks SSRF, deceptive suffixes, credentials, HTTP and ports', () => {
     for (const url of ['http://lookaside.fbsbx.com/v','https://fbsbx.com.evil.com/v','https://localhost/v','https://127.0.0.1/v','https://user:pass@lookaside.fbsbx.com/v','https://lookaside.fbsbx.com:8080/v']) expect(()=>secureUrl(url,['fbsbx.com'])).toThrow();
   });

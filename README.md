@@ -17,7 +17,7 @@ The Buffer API key exposes exactly this connected pair. Both IDs and usernames a
 
 An approved person shares a Reel in a separate 1-to-1 Instagram DM to the meme account. A minute cron polls the two exact sender-filtered conversations through Meta's Instagram Login API. It rechecks sender ID, recipient, timestamp and Reel format, commits permanent dedupe records, downloads a validated MP4 into private R2 and requests immediate automatic Buffer posts. It confirms both posts are `sent`, deletes the R2 object and revokes its temporary URL. The PC can be off.
 
-The user approved publishing the Arabic Meta app on October 2, 2026, and its dashboard now reports Published. Webhook signature validation and GET verification are retained, but only polling ingests publishing jobs in this configuration. No App Review or group chat integration was performed.
+The user approved publishing the Arabic Meta app on October 2, 2026. Signed live webhooks and minute polling now feed the same permanent message/job deduplication records. Webhooks preserve media that Meta may omit from subsequent message reads; polling remains the catch-up path. No App Review or group chat integration was performed.
 
 Publishing resolved live DM visibility: the same installed receiver token immediately returned conversation data. Both separate setup DMs were read through Meta, and their two distinct sender IDs were securely installed. Polling is active. Two real Reels reached both @avexiro0 destinations with all four posts sent and both private R2 objects deleted. The first TikTok post required guarded recovery; the friend's second Reel completed automatically. Sharing the exact first Reel from the friend created no additional job or post. See [installation evidence](docs/testing.md).
 
@@ -39,11 +39,17 @@ Each social-network delivery is reserved atomically before its Buffer mutation. 
 
 ### Polling and downloaders
 
+An approved sender can also upload a video directly in a DM. Only verified MP4 media from trusted Meta hosts is accepted; these uploads have an empty caption, and sender DM text is never copied. Original Reel captions keep the existing preservation rules. The same video size and cost limits apply.
+
+If Meta returns an approved message without text, a share or an attachment, polling keeps it pending and retries with increasing delays instead of permanently marking it seen. New messages take priority. At most 16 detail reads are made within the original 48-hour window; status exposes `mediaPending`, `mediaNeedsAttention` and `meta_media_unavailable`. Missing media is never guessed. If both push and polling omit the media, the sender must provide a public Reel URL or upload the video itself.
+
+On October 25, 2026, the operator explicitly enabled `ALLOW_EMPTY_CAPTION_FALLBACK=true`: original captions are preserved whenever a provider returns them, but a validated video can now post with an empty caption when the caption cannot be retrieved. Caption-capable providers run before a bare attachment recovery. No generated text or sender DM text is substituted.
+
 Both people share one D1 state row, lease, backoff and bounded hash cache. Quiet runs make four small Meta GETs total. At most three unseen message details per conversation and six per run are read, with the first sender alternating for fairness. Message history is bounded to Meta's latest 20 messages and 48 hours; high-volume bursts beyond that window are not guaranteed recoverable.
 
 The full reference downloader chain is retained: Meta attachment, authorized Meta Graph media, public Reel metadata, optional generic API, Apify Instagram Reel Scraper, VideoDropper, FastDL, SaveFrom and SnapInsta. Free direct providers run first. Apify precedes the unreliable website fallbacks as in the working project. No CAPTCHA solving, remote JavaScript execution, cookies or account credentials are sent to websites. The optional local VideoDropper recovery tool remains available for an existing approved job only.
 
-MP4 signature, MIME, byte limits, trusted hosts, redirect destinations and full streamed length are validated. Both destinations receive the original Reel caption/title with every @mention removed. All remaining text, punctuation, whitespace, line breaks and hashtags are preserved; nothing is generated, translated, trimmed, truncated or appended. Caption metadata comes from the media provider or the share's title, never from the sender's DM text or an Open Graph description. An explicitly empty source caption stays empty. If no original caption is available, publishing waits for a bounded download retry and then requires operator attention instead of inventing text.
+MP4 signature, MIME, byte limits, trusted hosts, redirect destinations and full streamed length are validated. Both destinations receive the original Reel caption/title with every @mention removed. All remaining text, punctuation, whitespace, line breaks and hashtags are preserved; nothing is generated, translated, trimmed, truncated or appended. Caption metadata comes from the media provider or the share's title, never from the sender's DM text or an Open Graph description. An explicitly empty source caption stays empty. With the operator-enabled empty-caption fallback, a validated video can publish without a caption when its original text is unavailable. No caption is invented.
 
 ## Cost controls
 

@@ -62,8 +62,8 @@ describe('Meta API message parsing', () => {
     expect(parseApiMessage(message(), '111', ['555'], 0)).toEqual([]);
     expect(parseApiMessage(message(), '111', ['222', '444'], Date.now())).toEqual([]);
   });
-  it('ignores uploaded videos, stories, unsafe URLs and ambiguous multiple shares', () => {
-    expect(parseApiMessage(message({ shares: {}, attachments: { data: [{ video_data: { url: 'https://lookaside.fbsbx.com/upload.mp4' } }] } }), '111', ['444'], 0)).toEqual([]);
+  it('accepts directly uploaded videos but ignores stories, unsafe URLs and ambiguous multiple shares', () => {
+    expect(parseApiMessage(message({ shares: {}, attachments: { data: [{ video_data: { url: 'https://lookaside.fbsbx.com/upload.mp4' } }] } }), '111', ['444'], 0)[0]).toMatchObject({ kind: 'video', title: '', attachmentUrl: 'https://lookaside.fbsbx.com/upload.mp4' });
     expect(parseApiMessage(message({ shares: { data: [{ type: 'story', url: 'https://lookaside.fbsbx.com/a' }] } }), '111', ['444'], 0)).toEqual([]);
     expect(parseApiMessage(message({ shares: { data: [{ type: 'reel', url: 'https://evil.example/video' }] } }), '111', ['444'], 0)).toEqual([]);
     expect(parseApiMessage(message({ shares: { data: [{ type: 'reel', id: 'a', url: 'https://lookaside.fbsbx.com/a' }, { type: 'reel', id: 'b', url: 'https://lookaside.fbsbx.com/b' }] } }), '111', ['444'], 0)).toEqual([]);
@@ -179,6 +179,51 @@ describe('durable owner-only polling', () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(await countJobs()).toBe(0);
   });
+  it('retries an empty approved message until Meta supplies its Reel instead of marking it seen', async () => {
+    const items = [message({ shares: undefined })];
+    const api = mockApi(items);
+    await pollInstagram(bindings(), { processJobs: false });
+    const state = (await settings<{ nextAt: number; seen: string[]; deferred: Record<string, { nextAt: number }> }>(env, 'instagram_poll'))!;
+    expect(state.seen).toEqual([]);
+    expect((await pollingStatus(bindings())).mediaPending).toBe(1);
+    api.fetcher.mockClear();
+    await due();
+    await pollInstagram(bindings(), { processJobs: false });
+    expect(api.fetcher.mock.calls.some(([url]) => String(url).includes('/message-1?'))).toBe(false);
+    state.nextAt = 0;
+    for (const retry of Object.values(state.deferred)) retry.nextAt = 0;
+    await saveSetting(env, 'instagram_poll', state);
+    items[0] = message();
+    await pollInstagram(bindings(), { processJobs: false });
+    expect(await countJobs()).toBe(1);
+    expect((await pollingStatus(bindings())).mediaPending).toBe(0);
+    expect(api.creates()).toBe(0);
+  });
+  it('does not let an unavailable older share block a newer Reel', async () => {
+    const items = [message({ shares: undefined })];
+    mockApi(items);
+    await pollInstagram(bindings(), { maxMessages: 1, processJobs: false });
+    items.push(message({ id: 'message-2' }));
+    await due();
+    await pollInstagram(bindings(), { maxMessages: 1, processJobs: false });
+    expect(await countJobs()).toBe(1);
+    expect((await pollingStatus(bindings())).mediaPending).toBe(1);
+  });
+  it('bounds repeated empty-media reads and exposes attention without posting guessed content', async () => {
+    const api = mockApi([message({ shares: undefined })]);
+    await saveSetting(env, 'instagram_poll', { startedAt: Date.now() - 60000, deferred: { [await sha256('message-1')]: { attempts: 16, nextAt: 0, expiresAt: Date.now() + 60000 } } });
+    await pollInstagram(bindings(), { processJobs: false });
+    expect((await pollingStatus(bindings()))).toMatchObject({ mediaPending: 0, mediaNeedsAttention: 1, mediaErrorCode: 'meta_media_unavailable' });
+    expect(api.fetcher.mock.calls.some(([url]) => String(url).includes('/message-1?'))).toBe(false);
+    expect(await countJobs()).toBe(0);
+  });
+  it('uploads a direct DM video to both channels with an empty caption and no scraper run', async () => {
+    const api = mockApi([message({ message: 'Do not copy this DM text', shares: undefined, attachments: { data: [{ file_url: 'https://lookaside.fbsbx.com/upload.mp4', video_data: { width: 1080 } }] } })]);
+    await pollInstagram(bindings());
+    expect(api.creates()).toBe(2);
+    expect(await env.DB.prepare('SELECT caption FROM jobs').first('caption')).toBe('');
+    expect(api.fetcher.mock.calls.some(([url]) => String(url).includes('api.apify.com'))).toBe(false);
+  });
   it('cannot fetch DMs or publish without configuration or in webhook mode', async () => {
     const fetcher = vi.spyOn(globalThis, 'fetch');
     for (const incomplete of [{ OWNER_IG_SENDER_ID: undefined }, { BUFFER_API_KEY: undefined }, { INGEST_MODE: 'webhook' as const }]) {
@@ -187,16 +232,30 @@ describe('durable owner-only polling', () => {
     expect(fetcher).not.toHaveBeenCalled();
     expect(await countJobs()).toBe(0);
   });
-  it('acknowledges a signed webhook without creating a second ingestion path in polling mode', async () => {
+  it('durably ingests a richer signed webhook in polling mode and dedupes its later API read', async () => {
     const body = JSON.stringify({ object: 'instagram', entry: [{ id: '222', messaging: [{ sender: { id: '111' }, recipient: { id: '222' }, timestamp: Date.now(), message: { mid: 'message-1', attachments: [{ type: 'reel', payload: { url: 'https://lookaside.fbsbx.com/reel.mp4' } }] } }] }] });
     const key = await crypto.subtle.importKey('raw', new TextEncoder().encode('test-app-secret'), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
     const hash = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(body)));
     const signature = 'sha256=' + [...hash].map(n => n.toString(16).padStart(2, '0')).join('');
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      if (String(input) !== 'https://worker.example/admin/tasks/enqueue') throw new Error('Unexpected publishing request');
+      const ctx = createExecutionContext();
+      const result = await worker.fetch(new Request(String(input), init), bindings(), ctx);
+      await waitOnExecutionContext(ctx);
+      return result;
+    });
     const ctx = createExecutionContext();
     const response = await worker.fetch(new Request('https://worker.example/webhooks/instagram', { method: 'POST', body, headers: { 'x-hub-signature-256': signature } }), bindings(), ctx);
     await waitOnExecutionContext(ctx);
     expect(response.status).toBe(200);
-    expect(await countJobs()).toBe(0);
+    expect(await countJobs()).toBe(1);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    fetcher.mockRestore();
+    mockApi([message({ shares: undefined })]);
+    await pollInstagram(bindings(), { processJobs: false });
+    expect(await countJobs()).toBe(1);
+    expect((await pollingStatus(bindings())).mediaPending).toBe(0);
+    expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM deliveries').first('n')).toBe(0);
   });
 });
 

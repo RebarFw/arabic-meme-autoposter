@@ -122,7 +122,7 @@ export async function asyncApifyItems(source: ReelSource, env: Env, jobId: strin
       state = { ...state, state: 'succeeded', nextAt: 0, errorCode: undefined };
       await save(state);
     }
-    return await request(`datasets/${state.datasetId}/items?limit=2&clean=true&fields=shortCode,type,productType,videoUrl,caption`);
+    return await request(`datasets/${state.datasetId}/items?limit=2&clean=true&fields=shortCode,type,productType,videoUrl,caption,error`);
   } catch (error) {
     if (error instanceof AppError && !(error instanceof DownloadDeferred) && error.retryable) pending(error.code, Date.now() + 5 * 60_000);
     throw error;

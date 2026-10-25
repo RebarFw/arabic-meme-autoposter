@@ -1,5 +1,18 @@
 # Arabic test and installation evidence
 
+## Missing-share and caption recovery - 2026-10-25
+
+Live Meta reads confirmed that the two messages from the enrolled friend at 16:24:38 and 17:35:53 UTC contained neither text, shares nor attachments, despite displaying the same playable Reel in the authorized Instagram inbox. The old poller had marked both IDs seen without creating a job. The original Reel URL was recovered from the browser and both messages were durably linked to one canonical job, preserving deduplication.
+
+Apify completed a single capped run for $0.0036 but returned an explicit restricted_page item. A free website fallback could retrieve the MP4, while the original strict caption policy discarded it because no caption metadata was available. After confirming the Reel had no visible original caption, the same job was recovered and both existing Buffer deliveries reached sent; the job is completed. The operator then explicitly selected automatic empty-caption fallback for future readable videos whose original captions cannot be obtained.
+
+Deployed Worker version: 0d482c23-20f2-4df5-b989-8bd88a73911e. Empty approved messages now receive bounded delayed retries, status exposes missing-media counts, direct DM videos are supported, profile-prefixed Reel links canonicalize, and signed push messages feed the same durable queue as polling. The existing Meta dashboard callback was blank. It was set to the Arabic Worker and verified; its messages subscription was already enabled and was preserved. Meta's real signed sample test was accepted, and the Worker logged webhook_authenticated with a 5 ms CPU reading. The sample's placeholder sender created no authorized publishing job. No app publication mode, account permissions or subscriptions were upgraded.
+
+Validation: lint, TypeScript, 166 Worker tests and 9 deployment tests passed. Health, GET webhook verification and unauthenticated admin rejection passed. Observed post-deployment cron/task CPU readings were 1-8 ms with successful outcomes. The Cloudflare usage guard remained enabled and allowed; no paid plan or quota ceiling changed. A fresh real sender resend was not performed because the operator was unable to resend at that time. Recovering the old job using a browser-derived URL is not proof that future API-empty shares will always expose media in their push payload.
+
+Private recovery evidence, rollback version and a credential-free Meta test screenshot are kept under .local/incident-2026-10-25/. Existing historical caption-policy evidence below predates the operator's newly enabled fallback.
+
+
 ## Slow downloader recovery — 2026-10-05
 
 The friend's latest share matched the already-queued Reel. Its five original Apify runs all ended `TIMED-OUT` at 60 seconds with empty datasets, while the Worker misleadingly stored `source_caption_unavailable`. Production now persists one asynchronous run and resumes it through short cloud tasks. Waiting is deferred without consuming ordinary job-failure attempts; terminal run retries are delayed and capped at three starts. The existing Free-plan checks, $0.0073 per-run ceiling, $4.50 stop, 500-run ceiling, original-caption policy, 25 MiB cap and posting reservations are retained.
