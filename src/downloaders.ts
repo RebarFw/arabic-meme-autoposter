@@ -132,16 +132,24 @@ export class ApifyVideoDownloader implements VideoDownloader {
   }
 }
 
-const TIKWM_MEDIA_HOSTS = ['tikwm.com', 'tiktokcdn.com', 'tiktokcdn-us.com'];
+const TIKTOK_CDN_HOSTS = ['tiktokcdn.com', 'tiktokcdn-us.com', 'tiktokcdn-eu.com'];
+const tiktokId = (url: string) => /\/video\/(\d{15,25})$/.exec(url)?.[1];
 
-// TikWM can return either its own media URL or a signed TikTok CDN URL.
+// Use TikWM for metadata only. Video bytes must come from TikTok's CDN.
 export class TikwmVideoDownloader implements VideoDownloader {
   readonly name = 'tikwm-public-video';
   supports(source: ReelSource): boolean { return source.kind === 'tiktok' && !!tiktokVideoUrl(source.tiktokUrl); }
   async download(source: ReelSource, env: Env, parent?: AbortSignal): Promise<DownloadedVideo> {
-    const url = tiktokVideoUrl(source.tiktokUrl);
+    let url = tiktokVideoUrl(source.tiktokUrl);
     if (!url || source.kind !== 'tiktok') throw new AppError('invalid_tiktok_source');
     const signal = downloadSignal(parent, 45_000);
+    if (!tiktokId(url)) {
+      const resolved = await safeFetch(url, ['tiktok.com'], { method: 'HEAD', headers: PUBLIC_PAGE_HEADERS, signal });
+      await resolved.body?.cancel();
+      url = tiktokVideoUrl(resolved.url);
+    }
+    const expected = url && tiktokId(url);
+    if (!url || !expected) throw new AppError('tiktok_video_id_unresolved');
     let response: Response;
     try {
       response = await fetch('https://www.tikwm.com/api/', {
@@ -154,21 +162,76 @@ export class TikwmVideoDownloader implements VideoDownloader {
     let payload: unknown;
     try { payload = JSON.parse(new TextDecoder().decode(await limitedBytes(response.body, 128_000))); }
     catch { throw new AppError('tiktok_resolver_invalid_response'); }
-    const result = payload as { code?: number; data?: { id?: unknown; title?: unknown; images?: unknown; hdplay?: unknown; play?: unknown } };
+    const result = payload as { code?: number; msg?: unknown; data?: { id?: unknown; title?: unknown; images?: unknown; hdplay?: unknown; play?: unknown } };
+    if (result?.code !== 0 && typeof result?.msg === 'string' && /(?:api limit|rate limit)/i.test(result.msg)) throw new AppError('tiktok_resolver_rate_limited', true);
     const data = result?.data;
     if (result?.code !== 0 || !data || typeof data.id !== 'string' || !/^\d{15,25}$/.test(data.id) ||
         (Array.isArray(data.images) && data.images.length > 0)) throw new AppError('tiktok_video_not_available');
-    const expected = /\/video\/(\d{15,25})$/.exec(new URL(url).pathname)?.[1];
-    if (expected && expected !== data.id) throw new AppError('tiktok_video_identity_mismatch');
-    const rawMedia = typeof data.hdplay === 'string' && data.hdplay ? data.hdplay : data.play;
+    if (expected !== data.id) throw new AppError('tiktok_video_identity_mismatch');
+    const rawMedia = typeof data.play === 'string' && data.play ? data.play : data.hdplay;
     if (typeof rawMedia !== 'string' || !rawMedia) throw new AppError('tiktok_video_not_available');
-    const media = new URL(rawMedia, 'https://www.tikwm.com');
-    return { ...await videoAt(media.href, TIKWM_MEDIA_HOSTS, this.name, env, signal),
+    return { ...await videoAt(rawMedia, TIKTOK_CDN_HOSTS, this.name, env, signal),
       caption: typeof data.title === 'string' ? data.title : undefined };
   }
 }
 
-export const providers: VideoDownloader[] = [new MetaAttachmentDownloader(), new MetaGraphDownloader(), new PublicPageDownloader(), new ApiVideoDownloader(), new ApifyVideoDownloader(), new TikwmVideoDownloader()];
+const TIKTOK_PAGE_MEDIA_HOSTS = [...TIKTOK_CDN_HOSTS, 'v16-webapp-prime.tiktok.com', 'v19-webapp-prime.tiktok.com'];
+
+interface TikTokPageData {
+  __DEFAULT_SCOPE__?: { 'webapp.video-detail'?: { itemInfo?: { itemStruct?: {
+    id?: unknown;
+    desc?: unknown;
+    privateItem?: boolean;
+    video?: { codecType?: string; playAddr?: unknown; bitrateInfo?: { CodecType?: string; PlayAddr?: { UrlList?: unknown[] } }[] };
+  } } } };
+}
+
+export class TikTokPublicPageDownloader implements VideoDownloader {
+  readonly name = 'tiktok-public-page';
+  supports(source: ReelSource): boolean { return source.kind === 'tiktok' && !!tiktokVideoUrl(source.tiktokUrl); }
+  async download(source: ReelSource, env: Env, parent?: AbortSignal): Promise<DownloadedVideo> {
+    const url = tiktokVideoUrl(source.tiktokUrl);
+    if (!url || source.kind !== 'tiktok') throw new AppError('invalid_tiktok_source');
+    const signal = downloadSignal(parent, 30_000);
+    const response = await safeFetch(url, ['tiktok.com'], { headers: PUBLIC_PAGE_HEADERS, signal });
+    const canonical = tiktokVideoUrl(response.url || url);
+    const requestedId = tiktokId(url);
+    const expected = canonical && tiktokId(canonical);
+    if (!response.ok || !expected || requestedId && requestedId !== expected) {
+      await response.body?.cancel();
+      throw new AppError('tiktok_page_unavailable', response.status === 429 || response.status >= 500);
+    }
+    const html = new TextDecoder().decode(await limitedBytes(response.body, 1_500_000));
+    const embedded = /<script\b[^>]*\bid=["']__UNIVERSAL_DATA_FOR_REHYDRATION__["'][^>]*>([\s\S]*?)<\/script>/i.exec(html)?.[1];
+    if (!embedded) throw new AppError('tiktok_page_metadata_missing');
+    let data: TikTokPageData;
+    try { data = JSON.parse(embedded); }
+    catch { throw new AppError('tiktok_page_metadata_invalid'); }
+    const item = data?.__DEFAULT_SCOPE__?.['webapp.video-detail']?.itemInfo?.itemStruct;
+    if (item?.id !== expected || item.privateItem || !item.video) throw new AppError('tiktok_page_video_mismatch');
+    const renditions = Array.isArray(item.video.bitrateInfo) ? item.video.bitrateInfo : [];
+    const h264 = renditions.find(rendition => rendition?.CodecType === 'h264' && Array.isArray(rendition.PlayAddr?.UrlList));
+    const candidates = h264?.PlayAddr?.UrlList ?? (item.video.codecType === 'h264' ? [item.video.playAddr] : []);
+    const headers = { 'User-Agent': PUBLIC_PAGE_HEADERS['User-Agent'], Referer: canonical, Origin: 'https://www.tiktok.com', Accept: 'video/mp4,video/*;q=0.9,*/*;q=0.1' };
+    const caption = typeof item.desc === 'string' ? item.desc : undefined;
+    let failure: AppError | undefined;
+    for (const candidate of [...new Set(candidates.slice(0, 4))]) {
+      if (typeof candidate !== 'string') continue;
+      let media: URL;
+      try { media = secureUrl(candidate, TIKTOK_PAGE_MEDIA_HOSTS); }
+      catch { continue; }
+      try {
+        return { ...await videoAt(media.href, TIKTOK_PAGE_MEDIA_HOSTS, this.name, env, signal, headers), caption };
+      } catch (error) {
+        if (error instanceof AppError && !failure?.retryable) failure = error;
+      }
+    }
+    throw failure ?? new AppError('tiktok_page_media_unavailable');
+  }
+}
+
+export const providers: VideoDownloader[] = [new MetaAttachmentDownloader(), new MetaGraphDownloader(), new PublicPageDownloader(), new ApiVideoDownloader(), new ApifyVideoDownloader()];
+const tiktokProviders: VideoDownloader[] = [new TikwmVideoDownloader(), new TikTokPublicPageDownloader()];
 export const thirdPartyProviders: VideoDownloader[] = [new VideoDropperDownloader(), new FastDlDownloader(), new SaveFromDownloader(), new SnapInstaDownloader()];
 export function configuredThirdPartyProviders(env: Env): VideoDownloader[] {
   const selected = [...new Set(env.THIRD_PARTY_DOWNLOADER_PROVIDERS?.split(',').map(s => s.trim()).filter(Boolean) ?? [])];
@@ -190,7 +253,8 @@ export async function downloadVideo(source: ReelSource, env: Env, jobId: string,
   // Caption-capable metadata providers get their normal chance first. Only
   // then recover a bare Meta attachment when no original title was supplied.
   const deferredAttachment = emptyFallback && typeof source.title !== 'string';
-  const chain = [...providers.filter(provider => !deferredAttachment || provider.name !== 'meta-attachment'), ...configuredThirdPartyProviders(env), ...(deferredAttachment ? [new MetaAttachmentDownloader()] : [])];
+  const chain = source.kind === 'tiktok' ? tiktokProviders :
+    [...providers.filter(provider => !deferredAttachment || provider.name !== 'meta-attachment'), ...configuredThirdPartyProviders(env), ...(deferredAttachment ? [new MetaAttachmentDownloader()] : [])];
   for (const provider of chain) {
     if (!provider.supports(source, env)) continue;
     // These providers cannot supply an original caption. Avoid parsing a large

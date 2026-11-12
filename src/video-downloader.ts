@@ -20,8 +20,8 @@ export function downloadSignal(parent: AbortSignal | undefined, milliseconds: nu
 
 // Validate before selecting a provider, so HTML disguised as MP4 or oversized
 // files fall through to the next provider instead of failing later in R2.
-export async function videoAt(url: string, hosts: string[], provider: string, env?: Env, signal?: AbortSignal): Promise<DownloadedVideo> {
-  const response = await safeFetch(url, hosts, { signal });
+export async function videoAt(url: string, hosts: string[], provider: string, env?: Env, signal?: AbortSignal, headers?: HeadersInit): Promise<DownloadedVideo> {
+  const response = await safeFetch(url, hosts, { signal, headers });
   if (!response.ok) {
     await response.body?.cancel();
     throw new AppError(`download_http_${response.status}`, response.status >= 500 || response.status === 429);
