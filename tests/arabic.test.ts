@@ -316,24 +316,48 @@ describe('TikTok video links received through approved Instagram DMs', () => {
     expect(parseApiMessage(shared, '999', ['222'], 0)).toEqual([]);
   });
 
-  it('resolves a public TikTok video, validates its identity and sends to both channels only once', async () => {
+  it.each(['resolver', 'public page'])('publishes a TikTok video from the %s to both channels only once', async provider => {
     const creates = socialMock(false, 'Hello  #test');
     const buffer = vi.mocked(globalThis.fetch).getMockImplementation()!;
     const requests: string[] = [];
-    const cdnVideo = 'https://v16-notes.tiktokcdn-us.com/video/sample.mp4?token=signed';
+    const usePublicPage = provider === 'public page';
+    const input = usePublicPage ? short : link;
+    const cdnVideo = usePublicPage ? 'https://v16-webapp-prime.tiktok.com/video/sample.mp4' : 'https://v16m.tiktokcdn-us.com/video/sample.mp4';
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
       requests.push(url);
       if (url === 'https://www.tikwm.com/api/') {
         expect(new Headers(init?.headers).has('Authorization')).toBe(false);
-        expect(new URLSearchParams(String(init?.body)).get('url')).toBe(link);
-        return Response.json({ code: 0, data: { id: '7361299999999999999', title: 'Hello @person #test', hdplay: cdnVideo } });
+        expect(new URLSearchParams(String(init?.body)).get('url')).toBe(usePublicPage ? short : link);
+        return usePublicPage ? Response.json({ code: -1, msg: 'Free Api Limit: 10000 request/ 1 day.' }) :
+          Response.json({ code: 0, data: { id: '7361299999999999999', title: 'Hello @person #test', play: cdnVideo } });
       }
-      if (url === cdnVideo)
+      if (usePublicPage && url === short) return Response.redirect(link);
+      if (usePublicPage && url === link) {
+        const itemStruct = { id: '7361299999999999999', desc: 'Hello @person #test', video: { bitrateInfo: [
+          { CodecType: 'h265_hvc1', PlayAddr: { UrlList: ['https://v16-webapp-prime.tiktok.com/video/hevc.mp4'] } },
+          { CodecType: 'h264', PlayAddr: { UrlList: [cdnVideo] } },
+        ] } };
+        const data = { __DEFAULT_SCOPE__: { 'webapp.video-detail': { itemInfo: { itemStruct } } } };
+        const response = new Response(`<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">${JSON.stringify(data)}</script>`);
+        Object.defineProperty(response, 'url', { value: link });
+        return response;
+      }
+      if (url === cdnVideo) {
+        if (usePublicPage) {
+          expect(new Headers(init?.headers).get('Referer')).toBe(link);
+          expect(new Headers(init?.headers).has('Cookie')).toBe(false);
+          return new Response(null, { status: 403 });
+        }
         return new Response(mp4, { headers: { 'Content-Type': 'video/mp4', 'Content-Length': String(mp4.length) } });
+      }
+      if (usePublicPage && url === 'https://tikcdn.io/ssstik/7361299999999999999') {
+        expect(new Headers(init?.headers).has('Referer')).toBe(false);
+        return new Response(mp4, { headers: { 'Content-Type': 'video/mp4', 'Content-Length': String(mp4.length) } });
+      }
       return buffer(input, init);
     });
-    const parsed = parseApiMessage(dm(link), '111', ['222'], 0);
+    const parsed = parseApiMessage(dm(input), '111', ['222'], 0);
     expect(parsed).toHaveLength(1);
     const id1 = await enqueue(bindings(), parsed[0]!);
     const id2 = await enqueue(bindings(), { ...parsed[0]!, senderId: '777', messageId: 'second-dm' });
