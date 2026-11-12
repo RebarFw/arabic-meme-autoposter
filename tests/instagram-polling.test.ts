@@ -232,8 +232,11 @@ describe('durable owner-only polling', () => {
     expect(fetcher).not.toHaveBeenCalled();
     expect(await countJobs()).toBe(0);
   });
-  it('durably ingests a richer signed webhook in polling mode and dedupes its later API read', async () => {
-    const body = JSON.stringify({ object: 'instagram', entry: [{ id: '222', messaging: [{ sender: { id: '111' }, recipient: { id: '222' }, timestamp: Date.now(), message: { mid: 'message-1', attachments: [{ type: 'reel', payload: { url: 'https://lookaside.fbsbx.com/reel.mp4' } }] } }] }] });
+  it.each([
+    ['reel', { attachments: [{ type: 'reel', payload: { url: 'https://lookaside.fbsbx.com/reel.mp4' } }] }],
+    ['tiktok', { text: 'https://vm.tiktok.com/ZSkExample/' }],
+  ])('durably ingests a signed %s webhook in polling mode and dedupes its later API read', async (kind, content) => {
+    const body = JSON.stringify({ object: 'instagram', entry: [{ id: '222', messaging: [{ sender: { id: '111' }, recipient: { id: '222' }, timestamp: Date.now(), message: { mid: 'message-1', ...content } }] }] });
     const key = await crypto.subtle.importKey('raw', new TextEncoder().encode('test-app-secret'), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
     const hash = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(body)));
     const signature = 'sha256=' + [...hash].map(n => n.toString(16).padStart(2, '0')).join('');
@@ -249,6 +252,7 @@ describe('durable owner-only polling', () => {
     await waitOnExecutionContext(ctx);
     expect(response.status).toBe(200);
     expect(await countJobs()).toBe(1);
+    expect(await env.DB.prepare("SELECT json_extract(source_json,'$.kind') AS kind FROM jobs").first('kind')).toBe(kind);
     expect(fetcher).toHaveBeenCalledTimes(1);
     fetcher.mockRestore();
     mockApi([message({ shares: undefined })]);

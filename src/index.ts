@@ -43,7 +43,7 @@ async function admin(request: Request, env: Env, path: string): Promise<Response
     const body = JSON.parse(new TextDecoder().decode(await limitedBytes(request.body, 8192)));
     const source = body?.source as ReelSource | undefined;
     const recipients = await settings<string[]>(env, 'recipient_ids');
-    if (!source || !['reel','shared-post','video'].includes(source.kind) || typeof source.messageId !== 'string' || !/^[\x21-\x7e]{1,512}$/.test(source.messageId) || !recipients?.includes(source.recipientId) || !Number.isFinite(source.timestamp) || source.timestamp < Date.now() - 48 * 3600_000 || source.timestamp > Date.now() + 300_000) throw new AppError('invalid_scheduled_source');
+    if (!source || !['reel','shared-post','video','tiktok'].includes(source.kind) || typeof source.messageId !== 'string' || !/^[\x21-\x7e]{1,512}$/.test(source.messageId) || !recipients?.includes(source.recipientId) || !Number.isFinite(source.timestamp) || source.timestamp < Date.now() - 48 * 3600_000 || source.timestamp > Date.now() + 300_000) throw new AppError('invalid_scheduled_source');
     return json({ jobId: await enqueue(env, source) });
   }
   if (path === '/admin/tasks/job' && request.method === 'POST') {
