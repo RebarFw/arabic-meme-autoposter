@@ -44,6 +44,21 @@ export function reelUrl(raw: unknown): string | undefined {
   } catch { return; }
 }
 
+// Accept only public TikTok video links; never accept arbitrary TikTok pages or hosts.
+export function tiktokVideoUrl(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return;
+  try {
+    const url = secureUrl(raw, ['tiktok.com']);
+    const host = url.hostname.toLowerCase();
+    const long = /^\/@([A-Za-z0-9._]{1,40})\/video\/(\d{15,25})\/?$/.exec(url.pathname);
+    if (['www.tiktok.com', 'm.tiktok.com', 'tiktok.com'].includes(host) && long)
+      return `https://www.tiktok.com/@${long[1]}/video/${long[2]}`;
+    const short = /^\/([A-Za-z0-9_-]{5,80})\/?$/.exec(url.pathname);
+    if (['vm.tiktok.com', 'vt.tiktok.com'].includes(host) && short)
+      return `https://${host}/${short[1]}/`;
+  } catch { /* Ignore malformed or untrusted URLs. */ }
+}
+
 export async function limitedBytes(body: ReadableStream<Uint8Array> | null, max: number): Promise<Uint8Array> {
   if (!body) throw new AppError('empty_body');
   const reader = body.getReader();
