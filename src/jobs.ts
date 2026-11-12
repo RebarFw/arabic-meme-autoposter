@@ -5,7 +5,7 @@ import { cloudflareCapacity, requireCloudflareCapacity } from './cloudflare-usag
 import { downloadVideo } from './downloaders';
 import { notifyOwner } from './meta';
 import { storeVideo, temporaryMediaUrl } from './media';
-import { META_MEDIA_HOSTS, reelUrl, secureUrl, sha256 } from './security';
+import { META_MEDIA_HOSTS, reelUrl, secureUrl, sha256, tiktokVideoUrl } from './security';
 import { AppError, DownloadDeferred, errorCode, log, type Channel, type Delivery, type Env, type Job, type ReelSource } from './types';
 
 export async function settings<T>(env: Env, key: string): Promise<T | null> {
@@ -24,7 +24,11 @@ export async function enqueue(env: Env, source: ReelSource): Promise<string> {
   const existing = await env.DB.prepare('SELECT job_id FROM message_tombstones WHERE message_hash=?').bind(messageHash).first<{ job_id: string }>();
   if (existing) return existing.job_id;
   const canonical = reelUrl(source.reelUrl);
-  const reelKey = canonical ? `reel:${new URL(canonical).pathname.split('/')[2]}` : source.mediaId ? `media:${source.mediaId}` : `message:${source.messageId}`;
+  const tiktok = source.kind === 'tiktok' ? tiktokVideoUrl(source.tiktokUrl) : undefined;
+  if (source.kind === 'tiktok' && !tiktok) throw new AppError('invalid_tiktok_source');
+  const tikTokKey = tiktok ? new URL(tiktok) : undefined;
+  const reelKey = tikTokKey ? `tiktok:${tikTokKey.pathname.includes('/video/') ? tikTokKey.pathname.split('/').pop() : tikTokKey.hostname + tikTokKey.pathname}` :
+    canonical ? `reel:${new URL(canonical).pathname.split('/')[2]}` : source.mediaId ? `media:${source.mediaId}` : `message:${source.messageId}`;
   const jobId = await sha256(`${source.recipientId}:${reelKey}`);
   const now = Date.now();
   const results = await env.DB.batch([
@@ -83,7 +87,7 @@ export async function retryRejectedDelivery(env: Env, id: string, service: strin
   if (!job?.source_json || job.state !== 'failed' || job.object_key || job.media_token || job.lease_until > Date.now()) throw new AppError('delivery_retry_not_safe');
   const source: ReelSource = JSON.parse(job.source_json);
   const recipients = await settings<string[]>(env, 'recipient_ids');
-  if (source.kind !== 'reel' || !senderAllowed(env, source.senderId) || !recipients?.includes(source.recipientId) || !Number.isFinite(source.timestamp) || source.timestamp < Date.now() - 48 * 3600_000 || source.timestamp > Date.now() + 300_000) throw new AppError('delivery_retry_not_safe');
+  if (!['reel', 'tiktok'].includes(source.kind) || !senderAllowed(env, source.senderId) || !recipients?.includes(source.recipientId) || !Number.isFinite(source.timestamp) || source.timestamp < Date.now() - 48 * 3600_000 || source.timestamp > Date.now() + 300_000) throw new AppError('delivery_retry_not_safe');
   const rows = await deliveries(env, id), rejected = rows.find(row => row.service === service), sent = rows.find(row => row.service !== service);
   if (rows.length !== 2 || rejected?.state !== 'failed' || rejected.post_id || !definiteBufferRejection(rejected.error_code) || sent?.state !== 'accepted' || sent.post_status !== 'sent' || !sent.post_id) throw new AppError('delivery_retry_not_safe');
   const client = new BufferClient(env), pair = await client.discoverChannels();
