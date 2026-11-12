@@ -39,10 +39,11 @@ export interface ReelSource {
   recipientId: string;
   timestamp: number;
   reelUrl?: string;
+  tiktokUrl?: string;
   attachmentUrl?: string;
   mediaId?: string;
   title?: string;
-  kind: 'reel' | 'shared-post' | 'video';
+  kind: 'reel' | 'shared-post' | 'video' | 'tiktok';
 }
 
 export interface Job {
