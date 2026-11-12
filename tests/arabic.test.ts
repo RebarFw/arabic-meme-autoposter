@@ -298,7 +298,7 @@ describe('TikTok video links received through approved Instagram DMs', () => {
       'http://www.tiktok.com/@creator/video/7361299999999999999',
       'https://www.tiktok.com/@creator',
       'https://www.tiktok.com/@creator/photo/7361299999999999999',
-      'https://vt.tiktok.com/redirect?url=https://evil.example',
+      'https://vt.tiktok.com/redirect/to/evil',
     ]) expect(tiktokVideoUrl(url)).toBeUndefined();
     expect(parseApiMessage(dm(link + ' ' + short), '111', ['222'], 0)).toEqual([]);
     expect(parseApiMessage(dm(link), '999', ['222'], 0)).toEqual([]);
