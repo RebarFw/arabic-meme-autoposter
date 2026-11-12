@@ -320,15 +320,16 @@ describe('TikTok video links received through approved Instagram DMs', () => {
     const creates = socialMock(false, 'Hello  #test');
     const buffer = vi.mocked(globalThis.fetch).getMockImplementation()!;
     const requests: string[] = [];
+    const cdnVideo = 'https://v16-notes.tiktokcdn-us.com/video/sample.mp4?token=signed';
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
       requests.push(url);
       if (url === 'https://www.tikwm.com/api/') {
         expect(new Headers(init?.headers).has('Authorization')).toBe(false);
         expect(new URLSearchParams(String(init?.body)).get('url')).toBe(link);
-        return Response.json({ code: 0, data: { id: '7361299999999999999', title: 'Hello @person #test', play: '/video/media/sample.mp4' } });
+        return Response.json({ code: 0, data: { id: '7361299999999999999', title: 'Hello @person #test', hdplay: cdnVideo } });
       }
-      if (url === 'https://www.tikwm.com/video/media/sample.mp4')
+      if (url === cdnVideo)
         return new Response(mp4, { headers: { 'Content-Type': 'video/mp4', 'Content-Length': String(mp4.length) } });
       return buffer(input, init);
     });
@@ -353,7 +354,7 @@ describe('TikTok video links received through approved Instagram DMs', () => {
     await expect(resolver.download(tiktokSource, bindings())).rejects.toThrow('tiktok_video_identity_mismatch');
     expect(api).toHaveBeenCalledTimes(1);
     api.mockResolvedValue(Response.json({
-      code: 0, data: { id: '7361299999999999999', title: 'Oops', play: 'https://evil.example/video.mp4' },
+      code: 0, data: { id: '7361299999999999999', title: 'Oops', play: 'https://tiktokcdn-us.com.evil.example/video.mp4' },
     }));
     await expect(resolver.download(tiktokSource, bindings())).rejects.toThrow('untrusted_url');
   });

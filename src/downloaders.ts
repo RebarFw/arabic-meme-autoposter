@@ -132,8 +132,9 @@ export class ApifyVideoDownloader implements VideoDownloader {
   }
 }
 
-// Public TikTok resolver. It never receives Meta/Buffer credentials, and
-// only validated MP4 files hosted on the resolver's domain may be downloaded.
+const TIKWM_MEDIA_HOSTS = ['tikwm.com', 'tiktokcdn.com', 'tiktokcdn-us.com'];
+
+// TikWM can return either its own media URL or a signed TikTok CDN URL.
 export class TikwmVideoDownloader implements VideoDownloader {
   readonly name = 'tikwm-public-video';
   supports(source: ReelSource): boolean { return source.kind === 'tiktok' && !!tiktokVideoUrl(source.tiktokUrl); }
@@ -161,8 +162,8 @@ export class TikwmVideoDownloader implements VideoDownloader {
     if (expected && expected !== data.id) throw new AppError('tiktok_video_identity_mismatch');
     const rawMedia = typeof data.hdplay === 'string' && data.hdplay ? data.hdplay : data.play;
     if (typeof rawMedia !== 'string' || !rawMedia) throw new AppError('tiktok_video_not_available');
-    const media = secureUrl(new URL(rawMedia, 'https://www.tikwm.com').toString(), ['tikwm.com']);
-    return { ...await videoAt(media.href, ['tikwm.com'], this.name, env, signal),
+    const media = new URL(rawMedia, 'https://www.tikwm.com');
+    return { ...await videoAt(media.href, TIKWM_MEDIA_HOSTS, this.name, env, signal),
       caption: typeof data.title === 'string' ? data.title : undefined };
   }
 }
