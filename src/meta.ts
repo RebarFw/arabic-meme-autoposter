@@ -48,7 +48,7 @@ export function parseMessages(payload: unknown, owner: string | string[], recipi
           const attachment = record(rawAttachment);
           if (!['share','ig_post','ig_reel','reel','video'].includes(String(attachment.type))) continue;
           const data = record(attachment.payload);
-          const candidateId = id(data.ig_post_media_id ?? data.id);
+          const candidateId = tiktokVideoUrl(data.url) ? undefined : id(data.ig_post_media_id ?? data.id);
           if (mediaId && candidateId && mediaId !== candidateId) { ambiguous = true; break; }
           mediaId ??= candidateId;
           if (typeof data.title === 'string') title = data.title;
