@@ -154,14 +154,13 @@ export class TikwmVideoDownloader implements VideoDownloader {
     let payload: unknown;
     try { payload = JSON.parse(new TextDecoder().decode(await limitedBytes(response.body, 128_000))); }
     catch { throw new AppError('tiktok_resolver_invalid_response'); }
-    const result = payload as { code?: number; msg?: unknown; data?: { id?: unknown; title?: unknown; images?: unknown; hdplay?: unknown; play?: unknown } };
-    if (result?.code !== 0 && typeof result?.msg === 'string' && /(?:api limit|rate limit)/i.test(result.msg)) throw new AppError('tiktok_resolver_rate_limited', true);
+    const result = payload as { code?: number; data?: { id?: unknown; title?: unknown; images?: unknown; hdplay?: unknown; play?: unknown } };
     const data = result?.data;
     if (result?.code !== 0 || !data || typeof data.id !== 'string' || !/^\d{15,25}$/.test(data.id) ||
         (Array.isArray(data.images) && data.images.length > 0)) throw new AppError('tiktok_video_not_available');
     const expected = /\/video\/(\d{15,25})$/.exec(new URL(url).pathname)?.[1];
     if (expected && expected !== data.id) throw new AppError('tiktok_video_identity_mismatch');
-    const rawMedia = typeof data.play === 'string' && data.play ? data.play : data.hdplay;
+    const rawMedia = typeof data.hdplay === 'string' && data.hdplay ? data.hdplay : data.play;
     if (typeof rawMedia !== 'string' || !rawMedia) throw new AppError('tiktok_video_not_available');
     const media = new URL(rawMedia, 'https://www.tikwm.com');
     return { ...await videoAt(media.href, TIKWM_MEDIA_HOSTS, this.name, env, signal),
@@ -169,70 +168,7 @@ export class TikwmVideoDownloader implements VideoDownloader {
   }
 }
 
-const TIKTOK_PAGE_MEDIA_HOSTS = [...TIKWM_MEDIA_HOSTS.slice(1), 'v16-webapp-prime.tiktok.com', 'v19-webapp-prime.tiktok.com'];
-
-interface TikTokPageData {
-  __DEFAULT_SCOPE__?: { 'webapp.video-detail'?: { itemInfo?: { itemStruct?: {
-    id?: unknown;
-    desc?: unknown;
-    privateItem?: boolean;
-    video?: { codecType?: string; playAddr?: unknown; bitrateInfo?: { CodecType?: string; PlayAddr?: { UrlList?: unknown[] } }[] };
-  } } } };
-}
-
-export class TikTokPublicPageDownloader implements VideoDownloader {
-  readonly name = 'tiktok-public-page';
-  supports(source: ReelSource): boolean { return source.kind === 'tiktok' && !!tiktokVideoUrl(source.tiktokUrl); }
-  async download(source: ReelSource, env: Env, parent?: AbortSignal): Promise<DownloadedVideo> {
-    const url = tiktokVideoUrl(source.tiktokUrl);
-    if (!url || source.kind !== 'tiktok') throw new AppError('invalid_tiktok_source');
-    const signal = downloadSignal(parent, 30_000);
-    const response = await safeFetch(url, ['tiktok.com'], { headers: PUBLIC_PAGE_HEADERS, signal });
-    const canonical = tiktokVideoUrl(response.url || url);
-    const requestedId = /\/video\/(\d{15,25})$/.exec(url)?.[1];
-    const expected = canonical && /\/video\/(\d{15,25})$/.exec(canonical)?.[1];
-    if (!response.ok || !expected || requestedId && requestedId !== expected) {
-      await response.body?.cancel();
-      throw new AppError('tiktok_page_unavailable', response.status === 429 || response.status >= 500);
-    }
-    const html = new TextDecoder().decode(await limitedBytes(response.body, 1_500_000));
-    const embedded = /<script\b[^>]*\bid=["']__UNIVERSAL_DATA_FOR_REHYDRATION__["'][^>]*>([\s\S]*?)<\/script>/i.exec(html)?.[1];
-    if (!embedded) throw new AppError('tiktok_page_metadata_missing');
-    let data: TikTokPageData;
-    try { data = JSON.parse(embedded); }
-    catch { throw new AppError('tiktok_page_metadata_invalid'); }
-    const item = data?.__DEFAULT_SCOPE__?.['webapp.video-detail']?.itemInfo?.itemStruct;
-    if (item?.id !== expected || item.privateItem || !item.video) throw new AppError('tiktok_page_video_mismatch');
-    const renditions = Array.isArray(item.video.bitrateInfo) ? item.video.bitrateInfo : [];
-    const h264 = renditions.find(rendition => rendition?.CodecType === 'h264' && Array.isArray(rendition.PlayAddr?.UrlList));
-    const candidates = h264?.PlayAddr?.UrlList ?? (item.video.codecType === 'h264' ? [item.video.playAddr] : []);
-    const headers = { 'User-Agent': PUBLIC_PAGE_HEADERS['User-Agent'], Referer: canonical, Origin: 'https://www.tiktok.com', Accept: 'video/mp4,video/*;q=0.9,*/*;q=0.1' };
-    const caption = typeof item.desc === 'string' ? item.desc : undefined;
-    let failure: AppError | undefined;
-    for (const candidate of [...new Set(candidates.slice(0, 4))]) {
-      if (typeof candidate !== 'string') continue;
-      let media: URL;
-      try { media = secureUrl(candidate, TIKTOK_PAGE_MEDIA_HOSTS); }
-      catch { continue; }
-      try {
-        return { ...await videoAt(media.href, TIKTOK_PAGE_MEDIA_HOSTS, this.name, env, signal, headers), caption };
-      } catch (error) {
-        if (error instanceof AppError && !failure?.retryable) failure = error;
-      }
-    }
-    // The backup serves public files by video ID. Only request an ID already
-    // verified against TikTok's own video page and never send page headers to it.
-    try {
-      const video = await videoAt(`https://tikcdn.io/ssstik/${expected}`, ['tikcdn.io'], 'tikcdn-public-video', env, signal, { 'User-Agent': headers['User-Agent'] });
-      return { ...video, caption };
-    } catch (error) {
-      if (failure?.retryable && error instanceof AppError && !error.retryable) throw failure;
-      throw error;
-    }
-  }
-}
-
-export const providers: VideoDownloader[] = [new MetaAttachmentDownloader(), new MetaGraphDownloader(), new PublicPageDownloader(), new ApiVideoDownloader(), new ApifyVideoDownloader(), new TikwmVideoDownloader(), new TikTokPublicPageDownloader()];
+export const providers: VideoDownloader[] = [new MetaAttachmentDownloader(), new MetaGraphDownloader(), new PublicPageDownloader(), new ApiVideoDownloader(), new ApifyVideoDownloader(), new TikwmVideoDownloader()];
 export const thirdPartyProviders: VideoDownloader[] = [new VideoDropperDownloader(), new FastDlDownloader(), new SaveFromDownloader(), new SnapInstaDownloader()];
 export function configuredThirdPartyProviders(env: Env): VideoDownloader[] {
   const selected = [...new Set(env.THIRD_PARTY_DOWNLOADER_PROVIDERS?.split(',').map(s => s.trim()).filter(Boolean) ?? [])];

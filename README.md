@@ -56,7 +56,7 @@ MP4 signature, MIME, byte limits, trusted hosts, redirect destinations and full 
 
 The **same two approved Instagram DM senders** can now send a public TikTok video link (full `https://www.tiktok.com/@creator/video/...` or short `https://vt.tiktok.com/...` / `https://vm.tiktok.com/...`). The Worker accepts one video link per message, keeps the existing sender/recipient checks and permanent dedupe, and sends the validated MP4 to **both** existing Buffer channels. The original TikTok title/caption is used, with the existing @mention removal; sender DM text is not copied. Instagram Reels and direct Instagram video uploads continue to work.
 
-The Worker first tries TikWM. If that download fails, it verifies the video ID against TikTok's public page and tries the page's H.264 rendition, then the public TikCDN endpoint for that ID. The downloaders use public URLs and no credentials. Private or unavailable videos, upstream outages, oversized files and non-MP4 responses can stop a job. Only send content you have permission to republish.
+TikTok videos are resolved through a **third-party public TikWM endpoint** without new credentials. This is best-effort: deleted/private/restricted videos, rate limits, upstream changes, videos above the existing size limit, or non-MP4 media will fail safely instead of posting an incorrect video. No arbitrary redirect URLs or untrusted MP4 hosts are followed. Only send content you have permission to republish.
 
 **This does not read TikTok DMs.** Direct TikTok inbox ingestion requires access to TikTok's restricted Business Messaging API and is not part of this change. This source uses Instagram DM only. Changes must be deployed to the existing Cloudflare Worker before they affect live DMs.
 
