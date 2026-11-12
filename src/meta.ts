@@ -1,5 +1,5 @@
 import { AppError, type Env, type ReelSource } from './types';
-import { limitedBytes, META_MEDIA_HOSTS, reelUrl, secureUrl } from './security';
+import { limitedBytes, META_MEDIA_HOSTS, reelUrl, secureUrl, tiktokVideoUrl } from './security';
 import { senderAllowed } from './senders';
 
 type RecordValue = Record<string, unknown>;
@@ -34,11 +34,13 @@ export function parseMessages(payload: unknown, owner: string | string[], recipi
       const text = typeof message.text === 'string' ? message.text.slice(0, 2000) : '';
       const links = text.match(/https:\/\/[^\s<>]+/g) ?? [];
       const reels = [...new Set(links.map(link => reelUrl(link.replace(/[),.!?]+$/, ''))).filter((url): url is string => !!url))];
-      if (reels.length > 1) continue;
+      const tiktoks = [...new Set(links.map(link => tiktokVideoUrl(link.replace(/[),.!?]+$/, ''))).filter((url): url is string => !!url))];
+      if (reels.length + tiktoks.length > 1) continue;
+      let tiktokUrl = tiktoks[0];
       let attachmentUrl: string | undefined;
       let mediaId: string | undefined;
       let title: string | undefined;
-      let kind: ReelSource['kind'] = reels.length ? 'reel' : 'shared-post';
+      let kind: ReelSource['kind'] = tiktokUrl ? 'tiktok' : reels.length ? 'reel' : 'shared-post';
       let foundShare = false;
       let ambiguous = false;
       if (Array.isArray(message.attachments)) {
@@ -54,17 +56,25 @@ export function parseMessages(payload: unknown, owner: string | string[], recipi
           // A directly uploaded DM video has no original Reel caption. Keep
           // its caption empty rather than copying unrelated sender text.
           if (attachment.type === 'video') {
-            if (reels.length || foundShare) { ambiguous = true; break; }
+            if (reels.length || tiktokUrl || foundShare) { ambiguous = true; break; }
             kind = 'video'; title = '';
           }
           if (typeof data.url !== 'string') continue;
           const candidateReel = reelUrl(data.url);
+          const candidateTikTok = tiktokVideoUrl(data.url);
           if (candidateReel) {
-            if (reels[0] && reels[0] !== candidateReel) { ambiguous = true; break; }
+            if (tiktokUrl || (reels[0] && reels[0] !== candidateReel)) { ambiguous = true; break; }
             reels[0] = candidateReel;
             kind = 'reel';
             foundShare = true;
+          } else if (candidateTikTok) {
+            if (reels[0] || mediaId || attachmentUrl || (tiktokUrl && tiktokUrl !== candidateTikTok)) { ambiguous = true; break; }
+            tiktokUrl = candidateTikTok;
+            kind = 'tiktok';
+            title = undefined; // Use the original caption from the TikTok resolver.
+            foundShare = true;
           } else {
+            if (tiktokUrl) { ambiguous = true; break; }
             try {
               const candidate = secureUrl(data.url, META_MEDIA_HOSTS).toString();
               if (attachmentUrl && attachmentUrl !== candidate && !candidateId) { ambiguous = true; break; }
@@ -74,7 +84,8 @@ export function parseMessages(payload: unknown, owner: string | string[], recipi
           }
         }
       }
-      if (!ambiguous && (foundShare || reels[0])) sources.push({ messageId, senderId, recipientId, timestamp: event.timestamp, reelUrl: reels[0], attachmentUrl, mediaId, title, kind });
+      if (!ambiguous && (foundShare || reels[0] || tiktokUrl) && !(tiktokUrl && (mediaId || attachmentUrl)))
+        sources.push({ messageId, senderId, recipientId, timestamp: event.timestamp, reelUrl: reels[0], tiktokUrl, attachmentUrl, mediaId, title, kind });
     }
   }
   return sources;
