@@ -25,7 +25,7 @@ interface PollState {
 }
 // A parsing change rechecks the bounded recent IDs. Permanent D1 job tombstones
 // still prevent external posts from being created again for an existing DM.
-const POLL_FORMAT_VERSION = 4;
+const POLL_FORMAT_VERSION = 5;
 const MEDIA_RETRY_LIMIT = 16;
 const MEDIA_RETRY_DELAYS = [60_000, 300_000, 900_000, 3600_000, 3 * 3600_000];
 
