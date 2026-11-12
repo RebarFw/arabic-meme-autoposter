@@ -1,6 +1,6 @@
 import { AppError, DownloadDeferred, errorCode, log, type Env, type ReelSource } from './types';
 import { asyncApifyItems } from './apify-download';
-import { limitedBytes, META_MEDIA_HOSTS, reelUrl, safeFetch, secureUrl } from './security';
+import { limitedBytes, META_MEDIA_HOSTS, reelUrl, safeFetch, secureUrl, tiktokVideoUrl } from './security';
 import { metaRequest } from './meta';
 import { downloadSignal, videoAt, type DownloadedVideo, type VideoDownloader } from './video-downloader';
 import { VideoDropperDownloader } from './downloader-providers/videodropper';
@@ -69,7 +69,7 @@ export class PublicPageDownloader implements VideoDownloader {
 
 export class ApiVideoDownloader implements VideoDownloader {
   readonly name = 'optional-downloader-api';
-  supports(source: ReelSource, env: Env): boolean { return !!env.DOWNLOADER_API_URL && !!(source.reelUrl || source.mediaId); }
+  supports(source: ReelSource, env: Env): boolean { return !!env.DOWNLOADER_API_URL && !!(source.reelUrl || source.tiktokUrl || source.mediaId); }
   async download(source: ReelSource, env: Env, parent?: AbortSignal): Promise<DownloadedVideo> {
     const signal = downloadSignal(parent, 25_000);
     // This is our documented adapter contract, not an invented vendor endpoint.
@@ -79,12 +79,12 @@ export class ApiVideoDownloader implements VideoDownloader {
     try { response = await fetch(endpoint.toString(), {
       method: 'POST', redirect: 'manual', signal,
       headers: { 'Content-Type': 'application/json', ...(env.DOWNLOADER_API_KEY ? { Authorization: `Bearer ${env.DOWNLOADER_API_KEY}` } : {}) },
-      body: JSON.stringify({ url: source.reelUrl, mediaId: source.mediaId, attachmentUrl: source.attachmentUrl }),
+      body: JSON.stringify({ url: source.tiktokUrl ?? source.reelUrl, mediaId: source.mediaId, attachmentUrl: source.attachmentUrl }),
     }); } catch { throw new AppError('downloader_api_network_error', true); }
     if (!response.ok) { await response.body?.cancel(); throw new AppError('downloader_api_error', response.status === 429 || response.status >= 500); }
     let data: { videoUrl?: string; contentType?: string; isReel?: boolean; caption?: string };
     try { data = JSON.parse(new TextDecoder().decode(await limitedBytes(response.body, 64_000))); } catch { throw new AppError('downloader_api_invalid_response'); }
-    if (!data.videoUrl || (source.kind !== 'reel' && data.isReel !== true)) throw new AppError('downloader_api_not_reel');
+    if (!data.videoUrl || (!['reel', 'tiktok'].includes(source.kind) && data.isReel !== true)) throw new AppError('downloader_api_not_reel');
     const hosts = [...META_MEDIA_HOSTS, ...(env.DOWNLOADER_MEDIA_HOSTS?.split(',').map(h => h.trim()).filter(h => /^[a-z0-9.-]+$/.test(h)) ?? [])];
     return { ...await videoAt(data.videoUrl, hosts, this.name, env, signal), caption: typeof data.caption === 'string' ? data.caption : undefined };
   }
@@ -132,7 +132,42 @@ export class ApifyVideoDownloader implements VideoDownloader {
   }
 }
 
-export const providers: VideoDownloader[] = [new MetaAttachmentDownloader(), new MetaGraphDownloader(), new PublicPageDownloader(), new ApiVideoDownloader(), new ApifyVideoDownloader()];
+// Public TikTok resolver. It never receives Meta/Buffer credentials, and
+// only validated MP4 files hosted on the resolver's domain may be downloaded.
+export class TikwmVideoDownloader implements VideoDownloader {
+  readonly name = 'tikwm-public-video';
+  supports(source: ReelSource): boolean { return source.kind === 'tiktok' && !!tiktokVideoUrl(source.tiktokUrl); }
+  async download(source: ReelSource, env: Env, parent?: AbortSignal): Promise<DownloadedVideo> {
+    const url = tiktokVideoUrl(source.tiktokUrl);
+    if (!url || source.kind !== 'tiktok') throw new AppError('invalid_tiktok_source');
+    const signal = downloadSignal(parent, 45_000);
+    let response: Response;
+    try {
+      response = await fetch('https://www.tikwm.com/api/', {
+        method: 'POST', redirect: 'manual', signal,
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json', 'User-Agent': PUBLIC_PAGE_HEADERS['User-Agent'] },
+        body: new URLSearchParams({ url, hd: '1' }).toString(),
+      });
+    } catch { throw new AppError('tiktok_resolver_network_error', true); }
+    if (!response.ok) { await response.body?.cancel(); throw new AppError('tiktok_resolver_http_error', response.status === 429 || response.status >= 500); }
+    let payload: unknown;
+    try { payload = JSON.parse(new TextDecoder().decode(await limitedBytes(response.body, 128_000))); }
+    catch { throw new AppError('tiktok_resolver_invalid_response'); }
+    const result = payload as { code?: number; data?: { id?: unknown; title?: unknown; images?: unknown; hdplay?: unknown; play?: unknown } };
+    const data = result?.data;
+    if (result?.code !== 0 || !data || typeof data.id !== 'string' || !/^\d{15,25}$/.test(data.id) ||
+        (Array.isArray(data.images) && data.images.length > 0)) throw new AppError('tiktok_video_not_available');
+    const expected = /\/video\/(\d{15,25})$/.exec(new URL(url).pathname)?.[1];
+    if (expected && expected !== data.id) throw new AppError('tiktok_video_identity_mismatch');
+    const rawMedia = typeof data.hdplay === 'string' && data.hdplay ? data.hdplay : data.play;
+    if (typeof rawMedia !== 'string' || !rawMedia) throw new AppError('tiktok_video_not_available');
+    const media = secureUrl(new URL(rawMedia, 'https://www.tikwm.com').toString(), ['tikwm.com']);
+    return { ...await videoAt(media.href, ['tikwm.com'], this.name, env, signal),
+      caption: typeof data.title === 'string' ? data.title : undefined };
+  }
+}
+
+export const providers: VideoDownloader[] = [new MetaAttachmentDownloader(), new MetaGraphDownloader(), new PublicPageDownloader(), new ApiVideoDownloader(), new ApifyVideoDownloader(), new TikwmVideoDownloader()];
 export const thirdPartyProviders: VideoDownloader[] = [new VideoDropperDownloader(), new FastDlDownloader(), new SaveFromDownloader(), new SnapInstaDownloader()];
 export function configuredThirdPartyProviders(env: Env): VideoDownloader[] {
   const selected = [...new Set(env.THIRD_PARTY_DOWNLOADER_PROVIDERS?.split(',').map(s => s.trim()).filter(Boolean) ?? [])];
@@ -189,5 +224,5 @@ export async function downloadVideo(source: ReelSource, env: Env, jobId: string,
     }
   }
   if (apifyFailure && (!captionActuallyMissing || apifyFailure.code === 'instagram_media_restricted')) throw apifyFailure;
-  throw new AppError(missingCaption ? 'source_caption_unavailable' : 'no_downloader_could_resolve_reel', missingCaption || retryable);
+  throw new AppError(missingCaption ? 'source_caption_unavailable' : source.kind === 'tiktok' ? 'no_downloader_could_resolve_tiktok' : 'no_downloader_could_resolve_reel', missingCaption || retryable);
 }

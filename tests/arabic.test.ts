@@ -9,6 +9,8 @@ import { parseApiMessage } from '../src/instagram-api';
 import { pollInstagram } from '../src/instagram-polling';
 import { acceptOwnerSetup, finishOwnerSetup, importOwnerSetup, ownerSetupStatus, startOwnerSetup } from '../src/owner-setup';
 import { approvedSenders } from '../src/senders';
+import { tiktokVideoUrl } from '../src/security';
+import { TikwmVideoDownloader } from '../src/downloaders';
 import type { Channel, Env, ReelSource } from '../src/types';
 
 const bindings = (): Env => ({ ...env, META_ACCESS_TOKEN: 'fake-meta', BUFFER_API_KEY: 'fake-buffer' });
@@ -277,5 +279,82 @@ describe('Arabic captions, Buffer identity and secret protection', () => {
     await waitOnExecutionContext(ctx);
     expect(await response.text()).not.toContain(sentinel);
     expect(JSON.stringify(logger.mock.calls)).not.toContain(sentinel);
+  });
+});
+
+describe('TikTok video links received through approved Instagram DMs', () => {
+  const link = 'https://www.tiktok.com/@creator/video/7361299999999999999';
+  const short = 'https://vt.tiktok.com/ZSkExample/';
+  const dm = (text: string, sender = '111', mid = crypto.randomUUID()) => ({
+    id: mid, from: { id: sender }, to: { data: [{ id: '222' }] },
+    created_time: new Date().toISOString(), message: text, shares: { data: [] },
+  });
+
+  it('canonicalizes public TikTok links and rejects impostor hosts, non-video pages and conflicting videos', () => {
+    expect(tiktokVideoUrl(link + '?utm_source=copy')).toBe(link);
+    expect(tiktokVideoUrl(short + '?share=1')).toBe(short);
+    for (const url of [
+      'https://tiktok.com.evil.example/@creator/video/7361299999999999999',
+      'http://www.tiktok.com/@creator/video/7361299999999999999',
+      'https://www.tiktok.com/@creator',
+      'https://www.tiktok.com/@creator/photo/7361299999999999999',
+      'https://vt.tiktok.com/redirect/to/evil',
+    ]) expect(tiktokVideoUrl(url)).toBeUndefined();
+    expect(parseApiMessage(dm(link + ' ' + short), '111', ['222'], 0)).toEqual([]);
+    expect(parseApiMessage(dm(link), '999', ['222'], 0)).toEqual([]);
+  });
+
+  it('accepts TikTok text links and native link-only shares only from allowed senders', () => {
+    expect(parseApiMessage(dm('Watch ' + link + '?lang=en'), '111', ['222'], 0)[0])
+      .toMatchObject({ kind: 'tiktok', tiktokUrl: link, recipientId: '222' });
+    expect(parseApiMessage(dm('Watch ' + short), '111', ['222'], 0)[0])
+      .toMatchObject({ kind: 'tiktok', tiktokUrl: short });
+    const shared = { ...dm(''), shares: { data: [{ link, name: 'untrusted title' }] } };
+    expect(parseApiMessage(shared, '111', ['222'], 0)[0])
+      .toMatchObject({ kind: 'tiktok', tiktokUrl: link });
+    expect(parseApiMessage(shared, '111', ['222'], 0)[0]?.title).toBeUndefined();
+    expect(parseApiMessage(shared, '999', ['222'], 0)).toEqual([]);
+  });
+
+  it('resolves a public TikTok video, validates its identity and sends to both channels only once', async () => {
+    const creates = socialMock(false, 'Hello  #test');
+    const buffer = vi.mocked(globalThis.fetch).getMockImplementation()!;
+    const requests: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      requests.push(url);
+      if (url === 'https://www.tikwm.com/api/') {
+        expect(new Headers(init?.headers).has('Authorization')).toBe(false);
+        expect(new URLSearchParams(String(init?.body)).get('url')).toBe(link);
+        return Response.json({ code: 0, data: { id: '7361299999999999999', title: 'Hello @person #test', play: '/video/media/sample.mp4' } });
+      }
+      if (url === 'https://www.tikwm.com/video/media/sample.mp4')
+        return new Response(mp4, { headers: { 'Content-Type': 'video/mp4', 'Content-Length': String(mp4.length) } });
+      return buffer(input, init);
+    });
+    const parsed = parseApiMessage(dm(link), '111', ['222'], 0);
+    expect(parsed).toHaveLength(1);
+    const id1 = await enqueue(bindings(), parsed[0]!);
+    const id2 = await enqueue(bindings(), { ...parsed[0]!, senderId: '777', messageId: 'second-dm' });
+    expect(id1).toBe(id2);
+    await processJob(bindings(), id1);
+    expect(creates.sort()).toEqual(['ig', 'tt']);
+    expect(requests.filter(url => url === 'https://www.tikwm.com/api/')).toHaveLength(1);
+    expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM jobs').first('n')).toBe(1);
+    expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM deliveries').first('n')).toBe(2);
+  });
+
+  it('rejects resolver identity mismatch and untrusted MP4 hosts', async () => {
+    const tiktokSource: ReelSource = { ...source(), kind: 'tiktok', reelUrl: undefined, attachmentUrl: undefined, title: undefined, tiktokUrl: link };
+    const resolver = new TikwmVideoDownloader();
+    const api = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({
+      code: 0, data: { id: '7361299999999999998', title: 'Oops', play: '/video/media/a.mp4' },
+    }));
+    await expect(resolver.download(tiktokSource, bindings())).rejects.toThrow('tiktok_video_identity_mismatch');
+    expect(api).toHaveBeenCalledTimes(1);
+    api.mockResolvedValue(Response.json({
+      code: 0, data: { id: '7361299999999999999', title: 'Oops', play: 'https://evil.example/video.mp4' },
+    }));
+    await expect(resolver.download(tiktokSource, bindings())).rejects.toThrow('untrusted_url');
   });
 });

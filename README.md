@@ -51,6 +51,15 @@ The full reference downloader chain is retained: Meta attachment, authorized Met
 
 MP4 signature, MIME, byte limits, trusted hosts, redirect destinations and full streamed length are validated. Both destinations receive the original Reel caption/title with every @mention removed. All remaining text, punctuation, whitespace, line breaks and hashtags are preserved; nothing is generated, translated, trimmed, truncated or appended. Caption metadata comes from the media provider or the share's title, never from the sender's DM text or an Open Graph description. An explicitly empty source caption stays empty. With the operator-enabled empty-caption fallback, a validated video can publish without a caption when its original text is unavailable. No caption is invented.
 
+
+### TikTok video links through Instagram DMs
+
+The **same two approved Instagram DM senders** can now send a public TikTok video link (full `https://www.tiktok.com/@creator/video/...` or short `https://vt.tiktok.com/...` / `https://vm.tiktok.com/...`). The Worker accepts one video link per message, keeps the existing sender/recipient checks and permanent dedupe, and sends the validated MP4 to **both** existing Buffer channels. The original TikTok title/caption is used, with the existing @mention removal; sender DM text is not copied. Instagram Reels and direct Instagram video uploads continue to work.
+
+TikTok videos are resolved through a **third-party public TikWM endpoint** without new credentials. This is best-effort: deleted/private/restricted videos, rate limits, upstream changes, videos above the existing size limit, or non-MP4 media will fail safely instead of posting an incorrect video. No arbitrary redirect URLs or untrusted MP4 hosts are followed. Only send content you have permission to republish.
+
+**This does not read TikTok DMs.** Direct TikTok inbox ingestion requires access to TikTok's restricted Business Messaging API and is not part of this change. This source uses Instagram DM only. Changes must be deployed to the existing Cloudflare Worker before they affect live DMs.
+
 ## Cost controls
 
 Cloudflare automation pauses at **90%** of the Workers Free/D1 Free/R2 Standard allowances, with account-wide analytics and atomic R2 reservations. Missing, partial or stale analytics fail closed. Health and protected status routes remain available during an application pause. Known-object deletion and independent R2 lifecycle expiry support cleanup. The app never upgrades a Cloudflare subscription. Analytics is delayed and sampled; this is a conservative application guard, not an account billing cap against unrelated usage or sudden bursts. See [Cloudflare limits and boundaries](docs/cloudflare-usage.md).

@@ -1,5 +1,5 @@
 import { metaRequest, parseMessages } from './meta';
-import { reelUrl } from './security';
+import { reelUrl, tiktokVideoUrl } from './security';
 import { AppError, type Env, type ReelSource } from './types';
 
 export type ApiObject = Record<string, unknown>;
@@ -38,9 +38,9 @@ export function parseApiMessage(message: ApiObject, owner: string | string[], re
   if (typeof sender.id !== 'string' || !allowlist.includes(sender.id) || !recipient || !apiId(message.id) || !Number.isFinite(timestamp) || timestamp < since || timestamp > now + 300_000) return [];
   // Instagram Login's actual Reel response uses shares.data[].link even
   // when the generic Message reference's url/type fields are omitted.
-  const attachments = apiItems(message.shares).filter(share => ['post', 'reel', 'ig_post', 'ig_reel'].includes(String(share.type)) || (!share.type && !!reelUrl(share.link))).flatMap(share => {
-    const link = reelUrl(share.link);
-    const type = share.type === 'post' ? 'ig_post' : share.type ?? 'reel';
+  const attachments = apiItems(message.shares).filter(share => ['post', 'reel', 'ig_post', 'ig_reel'].includes(String(share.type)) || (!share.type && !!(reelUrl(share.link) || tiktokVideoUrl(share.link)))).flatMap(share => {
+    const link = reelUrl(share.link) || tiktokVideoUrl(share.link);
+    const type = tiktokVideoUrl(link) ? 'share' : share.type === 'post' ? 'ig_post' : share.type ?? 'reel';
     const payload = { url: share.url ?? link, ig_post_media_id: share.id, title: share.name };
     return [{ type, payload }, ...(link && share.url ? [{ type: 'share', payload: { ...payload, url: link } }] : [])];
   });
