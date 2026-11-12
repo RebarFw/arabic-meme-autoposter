@@ -316,11 +316,11 @@ describe('TikTok video links received through approved Instagram DMs', () => {
     expect(parseApiMessage(shared, '999', ['222'], 0)).toEqual([]);
   });
 
-  it.each(['resolver', 'public page'])('publishes a TikTok video from the %s to both channels only once', async provider => {
+  it.each(['resolver', 'public page', 'substituted video'])('checks TikTok media from the %s before publishing', async provider => {
     const creates = socialMock(false, 'Hello  #test');
     const buffer = vi.mocked(globalThis.fetch).getMockImplementation()!;
     const requests: string[] = [];
-    const usePublicPage = provider === 'public page';
+    const usePublicPage = provider !== 'resolver';
     const input = usePublicPage ? short : link;
     const cdnVideo = usePublicPage ? 'https://v16-webapp-prime.tiktok.com/video/sample.mp4' : 'https://v16m.tiktokcdn-us.com/video/sample.mp4';
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
@@ -336,7 +336,7 @@ describe('TikTok video links received through approved Instagram DMs', () => {
       if (usePublicPage && url === link) {
         const itemStruct = { id: '7361299999999999999', desc: 'Hello @person #test', video: { bitrateInfo: [
           { CodecType: 'h265_hvc1', PlayAddr: { UrlList: ['https://v16-webapp-prime.tiktok.com/video/hevc.mp4'] } },
-          { CodecType: 'h264', PlayAddr: { UrlList: [cdnVideo] } },
+          { CodecType: 'h264', PlayAddr: { UrlList: [cdnVideo], FileHash: 'd5d13faff133d4d3e7baf86a294f9a7e' } },
         ] } };
         const data = { __DEFAULT_SCOPE__: { 'webapp.video-detail': { itemInfo: { itemStruct } } } };
         const response = new Response(`<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">${JSON.stringify(data)}</script>`);
@@ -348,7 +348,9 @@ describe('TikTok video links received through approved Instagram DMs', () => {
           expect(new Headers(init?.headers).get('Referer')).toBe(link);
           expect(new Headers(init?.headers).has('Cookie')).toBe(false);
         }
-        return new Response(mp4, { headers: { 'Content-Type': 'video/mp4', 'Content-Length': String(mp4.length) } });
+        const bytes = mp4.slice();
+        if (provider === 'substituted video') bytes[bytes.length - 1] = 0;
+        return new Response(bytes, { headers: { 'Content-Type': 'video/mp4', 'Content-Length': String(bytes.length) } });
       }
       return buffer(input, init);
     });
@@ -358,10 +360,10 @@ describe('TikTok video links received through approved Instagram DMs', () => {
     const id2 = await enqueue(bindings(), { ...parsed[0]!, senderId: '777', messageId: 'second-dm' });
     expect(id1).toBe(id2);
     await processJob(bindings(), id1);
-    expect(creates.sort()).toEqual(['ig', 'tt']);
+    expect(creates.sort()).toEqual(provider === 'substituted video' ? [] : ['ig', 'tt']);
     expect(requests.filter(url => url === 'https://www.tikwm.com/api/')).toHaveLength(1);
     expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM jobs').first('n')).toBe(1);
-    expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM deliveries').first('n')).toBe(2);
+    expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM deliveries').first('n')).toBe(provider === 'substituted video' ? 0 : 2);
   });
 
   it('rejects resolver identity mismatch and MP4s hosted by third parties', async () => {

@@ -150,7 +150,7 @@ async function download(env: Env, job: Job): Promise<void> {
   const saved = await env.DB.prepare('UPDATE jobs SET caption=? WHERE id=? AND lease_token=?')
     .bind(withoutMentions(video.caption), job.id, job.lease_token).run();
   if (!saved.meta.changes) { await video.response.body?.cancel(); return; }
-  const bytes = await storeVideo(env, video.response, key, expires);
+  const bytes = await storeVideo(env, video.response, key, expires, video.expectedMd5);
   await env.DB.batch(channels.map(c => env.DB.prepare('INSERT OR IGNORE INTO deliveries(job_id, service, channel_id, updated_at) VALUES (?,?,?,?)').bind(job.id, c.service, c.id, Date.now())));
   log('media_stored', { job: job.id, provider: video.provider, bytes });
   await updateJob(env, job, 'ready');

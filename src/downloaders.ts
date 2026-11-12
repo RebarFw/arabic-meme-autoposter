@@ -182,7 +182,7 @@ interface TikTokPageData {
     id?: unknown;
     desc?: unknown;
     privateItem?: boolean;
-    video?: { codecType?: string; playAddr?: unknown; bitrateInfo?: { CodecType?: string; PlayAddr?: { UrlList?: unknown[] } }[] };
+    video?: { bitrateInfo?: { CodecType?: string; PlayAddr?: { UrlList?: unknown[]; FileHash?: unknown } }[] };
   } } } };
 }
 
@@ -211,7 +211,9 @@ export class TikTokPublicPageDownloader implements VideoDownloader {
     if (item?.id !== expected || item.privateItem || !item.video) throw new AppError('tiktok_page_video_mismatch');
     const renditions = Array.isArray(item.video.bitrateInfo) ? item.video.bitrateInfo : [];
     const h264 = renditions.find(rendition => rendition?.CodecType === 'h264' && Array.isArray(rendition.PlayAddr?.UrlList));
-    const candidates = h264?.PlayAddr?.UrlList ?? (item.video.codecType === 'h264' ? [item.video.playAddr] : []);
+    const candidates = h264?.PlayAddr?.UrlList ?? [];
+    const checksum = h264?.PlayAddr?.FileHash;
+    if (typeof checksum !== 'string' || !/^[a-f0-9]{32}$/i.test(checksum)) throw new AppError('tiktok_page_checksum_missing');
     const headers = { 'User-Agent': PUBLIC_PAGE_HEADERS['User-Agent'], Referer: canonical, Origin: 'https://www.tiktok.com', Accept: 'video/mp4,video/*;q=0.9,*/*;q=0.1' };
     const caption = typeof item.desc === 'string' ? item.desc : undefined;
     let failure: AppError | undefined;
@@ -221,7 +223,7 @@ export class TikTokPublicPageDownloader implements VideoDownloader {
       try { media = secureUrl(candidate, TIKTOK_PAGE_MEDIA_HOSTS); }
       catch { continue; }
       try {
-        return { ...await videoAt(media.href, TIKTOK_PAGE_MEDIA_HOSTS, this.name, env, signal, headers), caption };
+        return { ...await videoAt(media.href, TIKTOK_PAGE_MEDIA_HOSTS, this.name, env, signal, headers), caption, expectedMd5: checksum.toLowerCase() };
       } catch (error) {
         if (error instanceof AppError && !failure?.retryable) failure = error;
       }

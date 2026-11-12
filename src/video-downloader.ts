@@ -1,7 +1,7 @@
 import { AppError, type Env, type ReelSource } from './types';
 import { safeFetch } from './security';
 
-export interface DownloadedVideo { response: Response; provider: string; caption?: string }
+export interface DownloadedVideo { response: Response; provider: string; caption?: string; expectedMd5?: string }
 const signatureVerified = new WeakMap<Response, number>();
 export function hasVerifiedMp4Signature(response: Response): boolean { return signatureVerified.get(response) === Number(response.headers.get('content-length')); }
 export function videoStreamError(error: unknown): unknown {
