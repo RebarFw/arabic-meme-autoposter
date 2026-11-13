@@ -10,7 +10,7 @@ import { pollInstagram } from '../src/instagram-polling';
 import { acceptOwnerSetup, finishOwnerSetup, importOwnerSetup, ownerSetupStatus, startOwnerSetup } from '../src/owner-setup';
 import { approvedSenders } from '../src/senders';
 import { tiktokVideoUrl } from '../src/security';
-import { TikwmVideoDownloader } from '../src/downloaders';
+import { apifyGuardResponse } from './apify-fixture';
 import type { Channel, Env, ReelSource } from '../src/types';
 
 const bindings = (): Env => ({ ...env, META_ACCESS_TOKEN: 'fake-meta', BUFFER_API_KEY: 'fake-buffer' });
@@ -26,7 +26,7 @@ const empty = (): Env => ({ ...bindings(), OWNER_IG_SENDER_ID: undefined, FRIEND
 const setupPayload = (text: string, sender = '111') => ({ object: 'instagram', entry: [{ id: '222', messaging: [{ sender: { id: sender }, recipient: { id: '222' }, timestamp: Date.now(), message: { mid: crypto.randomUUID(), text } }] }] });
 
 beforeEach(async () => {
-  await env.DB.batch(['message_tombstones', 'deliveries', 'jobs', 'settings'].map(table => env.DB.prepare(`DELETE FROM ${table}`)));
+  await env.DB.batch(['message_tombstones', 'deliveries', 'jobs', 'settings', 'apify_budget'].map(table => env.DB.prepare(`DELETE FROM ${table}`)));
   const page = await env.MEDIA.list(); if (page.objects.length) await env.MEDIA.delete(page.objects.map(o => o.key));
   await saveSetting(env, 'recipient_ids', ['222']); await saveSetting(env, 'channels', channels);
 });
@@ -316,24 +316,27 @@ describe('TikTok video links received through approved Instagram DMs', () => {
     expect(parseApiMessage(shared, '999', ['222'], 0)).toEqual([]);
   });
 
-  it.each(['resolver', 'public page', 'substituted video'])('checks TikTok media from the %s before publishing', async provider => {
+  it.each(['apify', 'public page', 'substituted video'])('checks TikTok media from the %s before publishing', async provider => {
     const creates = socialMock(false, 'Hello  #test');
     const buffer = vi.mocked(globalThis.fetch).getMockImplementation()!;
     const requests: string[] = [];
-    const usePublicPage = provider !== 'resolver';
-    const input = usePublicPage ? short : link;
-    const cdnVideo = usePublicPage ? 'https://v16-webapp-prime.tiktok.com/video/sample.mp4' : 'https://v16m.tiktokcdn-us.com/video/sample.mp4';
+    const useApify = provider !== 'public page';
+    const live = { ...bindings(), DOWNLOADER_PROVIDER: 'apify' as const, DOWNLOADER_API_KEY: 'test-apify-token' };
+    const cdnVideo = 'https://v16-webapp-prime.tiktok.com/video/sample.mp4';
+    const actorVideo = 'https://api.apify.com/v2/key-value-stores/store123/records/video-creator-20261112-7361299999999999999.mp4?signature=sample';
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
       requests.push(url);
-      if (url === 'https://www.tikwm.com/api/') {
-        expect(new Headers(init?.headers).has('Authorization')).toBe(false);
-        expect(new URLSearchParams(String(init?.body)).get('url')).toBe(link);
-        return usePublicPage ? Response.json({ code: -1, msg: 'Free Api Limit: 10000 request/ 1 day.' }) :
-          Response.json({ code: 0, data: { id: '7361299999999999999', title: 'Hello @person #test', play: cdnVideo } });
+      const guard = apifyGuardResponse(input); if (guard) return guard;
+      if (url.includes('/actors/crawl_craft~tiktok-video-scraper/runs?')) {
+        expect(new URL(url).searchParams.get('maxTotalChargeUsd')).toBe('0.0073');
+        expect(JSON.parse(String(init?.body))).toMatchObject({ urls: [link], shouldDownloadVideos: true, scrapeRelatedVideos: false });
+        return Response.json({ data: { id: 'run123', defaultDatasetId: 'data123' } });
       }
-      if (usePublicPage && url === short) return Response.redirect(link);
-      if (usePublicPage && url === link) {
+      if (url.endsWith('/actor-runs/run123')) return Response.json({ data: { id: 'run123', defaultDatasetId: 'data123', defaultKeyValueStoreId: 'store123', status: 'SUCCEEDED' } });
+      if (url.includes('/datasets/data123/items?')) return Response.json([{ id: '7361299999999999999', webVideoUrl: link, downloads: { video: actorVideo } }]);
+      if (url === short) return Response.redirect(link);
+      if (url === link) {
         const itemStruct = { id: '7361299999999999999', desc: 'Hello @person #test', video: { bitrateInfo: [
           { CodecType: 'h265_hvc1', PlayAddr: { UrlList: ['https://v16-webapp-prime.tiktok.com/video/hevc.mp4'] } },
           { CodecType: 'h264', PlayAddr: { UrlList: [cdnVideo], FileHash: 'd5d13faff133d4d3e7baf86a294f9a7e' } },
@@ -343,44 +346,30 @@ describe('TikTok video links received through approved Instagram DMs', () => {
         Object.defineProperty(response, 'url', { value: link });
         return response;
       }
-      if (url === cdnVideo) {
-        if (usePublicPage) {
-          expect(new Headers(init?.headers).get('Referer')).toBe(link);
-          expect(new Headers(init?.headers).has('Cookie')).toBe(false);
-        }
+      if (url === cdnVideo && useApify) return new Response(null, { status: 403 });
+      if (url === cdnVideo || url === actorVideo) {
+        expect(new Headers(init?.headers).has('Authorization')).toBe(false);
         const bytes = mp4.slice();
         if (provider === 'substituted video') bytes[bytes.length - 1] = 0;
         return new Response(bytes, { headers: { 'Content-Type': 'video/mp4', 'Content-Length': String(bytes.length) } });
       }
       return buffer(input, init);
     });
-    const parsed = parseApiMessage(dm(input), '111', ['222'], 0);
+    const parsed = parseApiMessage(dm(short), '111', ['222'], 0);
     expect(parsed).toHaveLength(1);
     const id1 = await enqueue(bindings(), parsed[0]!);
     const id2 = await enqueue(bindings(), { ...parsed[0]!, senderId: '777', messageId: 'second-dm' });
     expect(id1).toBe(id2);
-    await processJob(bindings(), id1);
+    await processJob(live, id1);
+    if (useApify) {
+      expect(creates).toEqual([]);
+      await env.DB.prepare('UPDATE jobs SET next_run_at=0 WHERE id=?').bind(id1).run();
+      await processJob(live, id1);
+    }
     expect(creates.sort()).toEqual(provider === 'substituted video' ? [] : ['ig', 'tt']);
-    expect(requests.filter(url => url === 'https://www.tikwm.com/api/')).toHaveLength(1);
+    expect(requests.filter(url => url.includes('/actors/crawl_craft~tiktok-video-scraper/runs?'))).toHaveLength(useApify ? 1 : 0);
     expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM jobs').first('n')).toBe(1);
     expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM deliveries').first('n')).toBe(provider === 'substituted video' ? 0 : 2);
   });
 
-  it('rejects resolver identity mismatch and MP4s hosted by third parties', async () => {
-    const tiktokSource: ReelSource = { ...source(), kind: 'tiktok', reelUrl: undefined, attachmentUrl: undefined, title: undefined, tiktokUrl: link };
-    const resolver = new TikwmVideoDownloader();
-    const api = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({
-      code: 0, data: { id: '7361299999999999998', title: 'Oops', play: '/video/media/a.mp4' },
-    }));
-    await expect(resolver.download(tiktokSource, bindings())).rejects.toThrow('tiktok_video_identity_mismatch');
-    expect(api).toHaveBeenCalledTimes(1);
-    api.mockResolvedValue(Response.json({
-      code: 0, data: { id: '7361299999999999999', title: 'Oops', play: 'https://tiktokcdn-us.com.evil.example/video.mp4' },
-    }));
-    await expect(resolver.download(tiktokSource, bindings())).rejects.toThrow('untrusted_url');
-    api.mockResolvedValue(Response.json({
-      code: 0, data: { id: '7361299999999999999', play: 'https://www.tikwm.com/video/media/placeholder.mp4' },
-    }));
-    await expect(resolver.download(tiktokSource, bindings())).rejects.toThrow('untrusted_url');
-  });
 });

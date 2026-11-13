@@ -1,14 +1,15 @@
 import { APIFY_RUN_MAX_USD, reserveApifyRun } from './apify-budget';
-import { limitedBytes, reelUrl, sha256 } from './security';
+import { limitedBytes, reelUrl, sha256, tiktokVideoUrl } from './security';
 import { AppError, DownloadDeferred, type Env, type ReelSource } from './types';
 
-const ACTOR = 'apify~instagram-reel-scraper';
+const REEL_ACTOR = 'apify~instagram-reel-scraper';
+const TIKTOK_ACTOR = 'crawl_craft~tiktok-video-scraper';
 const MAX_ATTEMPTS = 3;
 const RUN_TIMEOUT_SECONDS = 600;
 interface State {
   reelHash: string; state: 'new' | 'starting' | 'uncertain' | 'running' | 'succeeded' | 'failed';
   attempts: number; startedAt: number; nextAt: number; expiresAt: number;
-  runId?: string; datasetId?: string; errorCode?: string; reconciliations?: number;
+  runId?: string; datasetId?: string; storageId?: string; errorCode?: string; reconciliations?: number;
 }
 const validId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9]{1,80}$/.test(value);
 const pending = (code = 'apify_run_pending', at = Date.now() + 60_000): never => { throw new DownloadDeferred(code, at); };
@@ -16,10 +17,14 @@ const pending = (code = 'apify_run_pending', at = Date.now() + 60_000): never =>
 // Only one capped Actor start per persisted attempt. Cloud polling resumes the
 // same run after an HTTP disconnect or Worker restart; it never restarts a
 // still-running scrape simply because a minute passed.
-export async function asyncApifyItems(source: ReelSource, env: Env, jobId: string): Promise<unknown> {
-  const url = reelUrl(source.reelUrl);
+export async function asyncApifyItems(source: ReelSource, env: Env, jobId: string, canonicalTikTokUrl?: string): Promise<unknown> {
+  const isTikTok = source.kind === 'tiktok';
+  const url = isTikTok ? tiktokVideoUrl(canonicalTikTokUrl) : reelUrl(source.reelUrl);
   const token = env.DOWNLOADER_API_KEY?.trim();
   if (env.DOWNLOADER_PROVIDER !== 'apify' || !url || !/^[a-f0-9]{64}$/.test(jobId) || !token || !/^[A-Za-z0-9_-]{10,256}$/.test(token)) throw new AppError('apify_not_configured');
+  const actor = isTikTok ? TIKTOK_ACTOR : REEL_ACTOR;
+  const input = isTikTok ? { urls: [url], shouldDownloadVideos: true, scrapeRelatedVideos: false, resultsPerPage: 1 } :
+    { username: [url], resultsLimit: 1, includeSharesCount: false, includeTranscript: false, includeDownloadedVideo: false };
   const key = 'apify_download:' + jobId;
   const hash = await sha256(url);
   async function save(state: State) { await env.DB.prepare('UPDATE settings SET value=? WHERE key=?').bind(JSON.stringify(state), key).run(); }
@@ -66,7 +71,7 @@ export async function asyncApifyItems(source: ReelSource, env: Env, jobId: strin
     let run: Record<string, unknown>;
     try {
       const query = new URLSearchParams({ timeout: String(RUN_TIMEOUT_SECONDS), maxTotalChargeUsd: String(APIFY_RUN_MAX_USD), maxItems: '1', waitForFinish: '0' });
-      const result = await request(`actors/${ACTOR}/runs?${query}`, { username: [url], resultsLimit: 1, includeSharesCount: false, includeTranscript: false, includeDownloadedVideo: false });
+      const result = await request(`actors/${actor}/runs?${query}`, input);
       run = result.data as Record<string, unknown>;
       if (!run || !validId(run.id) || !validId(run.defaultDatasetId)) throw new AppError('apify_start_uncertain', true);
     } catch (error) {
@@ -88,14 +93,17 @@ export async function asyncApifyItems(source: ReelSource, env: Env, jobId: strin
     if (state.state === 'starting' || state.state === 'uncertain') {
       // Reconcile an ambiguous start before allowing any new start. Only this
       // Actor, the exact input Reel, time and capped options can be adopted.
-      const list = await request(`actors/${ACTOR}/runs?desc=1&limit=10`);
+      const list = await request(`actors/${actor}/runs?desc=1&limit=10`);
       const items = (list.data as { items?: Record<string, unknown>[] })?.items ?? [];
       const candidates = items.filter(run => Date.parse(String(run.startedAt)) >= state.startedAt - 5000 && validId(run.id) && validId(run.defaultKeyValueStoreId));
       const matches = [];
       for (const run of candidates.slice(0, 3)) {
-        const input = await request(`key-value-stores/${run.defaultKeyValueStoreId}/records/INPUT`);
+        const savedInput = await request(`key-value-stores/${run.defaultKeyValueStoreId}/records/INPUT`);
         const opts = run.options as { maxTotalChargeUsd?: number; timeoutSecs?: number } | undefined;
-        if (Array.isArray(input.username) && input.username.length === 1 && reelUrl(input.username[0]) === url && validId(run.defaultDatasetId) && opts?.maxTotalChargeUsd === APIFY_RUN_MAX_USD && (opts.timeoutSecs ?? Infinity) <= RUN_TIMEOUT_SECONDS) matches.push(run);
+        const urls = isTikTok ? savedInput.urls : savedInput.username;
+        const matchingUrl = Array.isArray(urls) && urls.length === 1 && (isTikTok ? tiktokVideoUrl(urls[0]) : reelUrl(urls[0])) === url;
+        const matchingMode = !isTikTok || savedInput.shouldDownloadVideos === true && savedInput.scrapeRelatedVideos === false;
+        if (matchingUrl && matchingMode && validId(run.defaultDatasetId) && opts?.maxTotalChargeUsd === APIFY_RUN_MAX_USD && (opts.timeoutSecs ?? Infinity) <= RUN_TIMEOUT_SECONDS) matches.push(run);
       }
       if (matches.length !== 1) {
         state.reconciliations = (state.reconciliations ?? 0) + 1;
@@ -109,7 +117,7 @@ export async function asyncApifyItems(source: ReelSource, env: Env, jobId: strin
     if (!validId(state.runId) || !validId(state.datasetId)) throw new AppError('apify_invalid_run');
     if (state.state !== 'succeeded') {
       const result = await request(`actor-runs/${state.runId}`);
-      const run = result.data as { id?: string; status?: string; defaultDatasetId?: string } | undefined;
+      const run = result.data as { id?: string; status?: string; defaultDatasetId?: string; defaultKeyValueStoreId?: string } | undefined;
       if (run?.id !== state.runId || run.defaultDatasetId !== state.datasetId) throw new AppError('apify_invalid_run');
       if (['READY','RUNNING','TIMING-OUT','ABORTING'].includes(run.status ?? '')) pending();
       if (run.status !== 'SUCCEEDED') {
@@ -119,10 +127,13 @@ export async function asyncApifyItems(source: ReelSource, env: Env, jobId: strin
         if (state.attempts >= MAX_ATTEMPTS) throw new AppError(code);
         pending(code, state.nextAt);
       }
-      state = { ...state, state: 'succeeded', nextAt: 0, errorCode: undefined };
+      if (isTikTok && !validId(run.defaultKeyValueStoreId)) throw new AppError('apify_invalid_run');
+      state = { ...state, state: 'succeeded', storageId: isTikTok ? run.defaultKeyValueStoreId : undefined, nextAt: 0, errorCode: undefined };
       await save(state);
     }
-    return await request(`datasets/${state.datasetId}/items?limit=2&clean=true&fields=shortCode,type,productType,videoUrl,caption,error`);
+    const fields = isTikTok ? 'id,webVideoUrl,downloads,isSlideshow,isPrivate,forFriendsOnly' : 'shortCode,type,productType,videoUrl,caption,error';
+    const items = await request(`datasets/${state.datasetId}/items?limit=2&clean=true&fields=${fields}`);
+    return isTikTok ? { items, storageId: state.storageId } : items;
   } catch (error) {
     if (error instanceof AppError && !(error instanceof DownloadDeferred) && error.retryable) pending(error.code, Date.now() + 5 * 60_000);
     throw error;

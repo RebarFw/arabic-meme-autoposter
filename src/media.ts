@@ -3,7 +3,7 @@ import { constantTimeEqual } from './security';
 import { reserveCloudflareMedia } from './cloudflare-usage';
 import { hasVerifiedMp4Signature, videoStreamError } from './video-downloader';
 
-export async function storeVideo(env: Env, response: Response, key: string, expiresAt: number, expectedMd5?: string): Promise<number> {
+export async function storeVideo(env: Env, response: Response, key: string, expiresAt: number, expectedMd5?: string[]): Promise<number> {
   const max = Math.min(Number(env.MAX_VIDEO_BYTES) || 26_214_400, 100_000_000);
   const length = Number(response.headers.get('content-length'));
   if (!Number.isSafeInteger(length) || length < 12 || length > max || !response.body || response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() !== 'video/mp4' || response.headers.get('content-encoding')) {
@@ -13,10 +13,15 @@ export async function storeVideo(env: Env, response: Response, key: string, expi
     try { await reserveCloudflareMedia(env, key, length, expiresAt); }
     catch (error) { await response.body.cancel().catch(() => {}); throw error; }
     try {
-      await env.MEDIA.put(key, response.body, { md5: expectedMd5, httpMetadata: { contentType: 'video/mp4', cacheControl: 'private, no-store' }, customMetadata: { expiresAt: String(expiresAt) } });
+      const object = await env.MEDIA.put(key, response.body, { httpMetadata: { contentType: 'video/mp4', cacheControl: 'private, no-store' }, customMetadata: { expiresAt: String(expiresAt) } });
+      if (expectedMd5) {
+        const checksum = object.checksums.toJSON().md5;
+        if (!checksum || !expectedMd5.includes(checksum.toLowerCase())) throw new AppError('video_checksum_mismatch');
+      }
     } catch (error) { await response.body.cancel(error).catch(() => {}); await env.MEDIA.delete(key); throw videoStreamError(error); }
     return length;
   }
+  if (expectedMd5) { await response.body.cancel(); throw new AppError('video_signature_unverified'); }
   const reader = response.body.getReader();
   const initial: Uint8Array[] = [];
   let initialSize = 0;
@@ -42,7 +47,6 @@ export async function storeVideo(env: Env, response: Response, key: string, expi
   const stream = new FixedLengthStream(length);
   const writer = stream.writable.getWriter();
   const upload = env.MEDIA.put(key, stream.readable, {
-    md5: expectedMd5,
     httpMetadata: { contentType: 'video/mp4', cacheControl: 'private, no-store' },
     customMetadata: { expiresAt: String(expiresAt) },
   }).catch(async error => {
