@@ -134,7 +134,8 @@ async function removeMedia(env: Env, job: Job): Promise<void> {
 async function download(env: Env, job: Job): Promise<void> {
   if (!job.source_json) throw new AppError('job_source_missing');
   const channels = await settings<Channel[]>(env, 'channels');
-  if (!channels || channels.length !== 2) throw new AppError('channels_not_configured', true);
+  if (!channels || ![2,3].includes(channels.length) || channels[0]?.service !== 'instagram' ||
+      channels[1]?.service !== 'tiktok' || (channels.length === 3 && channels[2]?.service !== 'youtube')) throw new AppError('channels_not_configured', true);
   const source: ReelSource = JSON.parse(job.source_json);
   if (!senderAllowed(env, source.senderId)) throw new AppError('sender_not_authorized');
   const key = `arabic-meme-autoposter/${job.id}.mp4`;
@@ -165,7 +166,7 @@ async function publish(env: Env, job: Job, maxDeliveries = 2): Promise<void> {
   const caption = withoutMentions(job.caption);
   if (!job.object_key || !job.media_expires_at || job.media_expires_at <= Date.now() || !await env.MEDIA.head(job.object_key)) throw new AppError('media_missing_or_expired');
   const client = new BufferClient(env);
-  if (env.EXPECTED_INSTAGRAM_CHANNEL_ID || env.EXPECTED_TIKTOK_CHANNEL_ID) await client.discoverChannels();
+  if (env.EXPECTED_INSTAGRAM_CHANNEL_ID || env.EXPECTED_TIKTOK_CHANNEL_ID || env.EXPECTED_YOUTUBE_CHANNEL_ID) await client.discoverChannels();
   let submitted = 0;
   for (const delivery of await deliveries(env, job.id)) {
     if (delivery.state !== 'pending') continue;
@@ -190,7 +191,7 @@ async function publish(env: Env, job: Job, maxDeliveries = 2): Promise<void> {
     }
   }
   const current = await deliveries(env, job.id);
-  if (current.length !== 2) throw new AppError('deliveries_missing');
+  if (![2,3].includes(current.length)) throw new AppError('deliveries_missing');
   if (current.some(delivery => delivery.state === 'pending')) { await updateJob(env, job, 'ready'); return; }
   log('buffer_submission_summary', { job: job.id, bothAccepted: current.every(d => d.state === 'accepted') });
   await updateJob(env, job, 'waiting', null, 60_000);
@@ -211,7 +212,7 @@ async function checkPosts(env: Env, job: Job, maxDeliveries = 2): Promise<void> 
       .bind(post.status, failed ? 'failed' : 'accepted', failed ? 'buffer_publish_failed' : null, Date.now(), job.id, delivery.service).run();
   }
   const current = await deliveries(env, job.id);
-  if (current.length === 2 && current.every(d => d.state === 'accepted' && d.post_status === 'sent')) {
+  if ([2,3].includes(current.length) && current.every(d => d.state === 'accepted' && d.post_status === 'sent')) {
     await removeMedia(env, job);
     await updateJob(env, job, 'completed');
     log('job_completed', { job: job.id, bothPublished: true });
@@ -234,7 +235,7 @@ async function checkPosts(env: Env, job: Job, maxDeliveries = 2): Promise<void> 
     log('job_needs_attention', { job: job.id, code: 'buffer_submission_uncertain' });
   } else {
     const progressed = current.some(d => checked.has(d.service) && (d.post_status === 'sent' || d.state === 'failed'));
-    // Check both channels fairly, then preserve the minute/hour backoff.
+    // Check all configured destinations fairly, preserving the minute/hour backoff.
     // A slow provider must not turn the staged scheduler into a tight poll loop.
     const remaining = current.some(d => d.state === 'accepted' && d.post_status !== 'sent' && !checked.has(d.service) && (progressed || (d.updated_at ?? 0) <= dueBefore));
     await updateJob(env, job, 'waiting', unknown ? 'buffer_submission_uncertain' : null, remaining ? 0 : Date.now() - job.created_at > 600_000 ? 3600_000 : 60_000);

@@ -9,8 +9,10 @@ export interface Env {
   FRIEND_IG_SENDER_ID?: string;
   EXPECTED_INSTAGRAM_CHANNEL_ID?: string;
   EXPECTED_TIKTOK_CHANNEL_ID?: string;
+  EXPECTED_YOUTUBE_CHANNEL_ID?: string;
   EXPECTED_INSTAGRAM_USERNAME?: string;
   EXPECTED_TIKTOK_USERNAME?: string;
+  EXPECTED_YOUTUBE_USERNAME?: string;
   ADMIN_TOKEN?: string;
   DOWNLOADER_API_KEY?: string;
   CLOUDFLARE_USAGE_TOKEN?: string;
@@ -67,7 +69,7 @@ export interface Job {
 
 export interface Channel {
   id: string;
-  service: 'instagram' | 'tiktok';
+  service: 'instagram' | 'tiktok' | 'youtube';
   name: string;
   serviceId: string;
   organizationId: string;
@@ -78,7 +80,7 @@ export interface Channel {
 
 export interface Delivery {
   job_id: string;
-  service: 'instagram' | 'tiktok';
+  service: 'instagram' | 'tiktok' | 'youtube';
   channel_id: string;
   state: string;
   post_id: string | null;
