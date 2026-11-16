@@ -55,7 +55,7 @@ export class BufferClient {
     return result.data;
   }
 
-  async discoverChannels(): Promise<Channel[]> {
+  async discoverChannels(requireYoutube = false): Promise<Channel[]> {
     const account = await this.query<{ account: { organizations: { id: string }[] } }>('query { account { organizations { id } } }');
     const candidates: Channel[] = [];
     for (const org of account.account.organizations.slice(0, 10)) {
@@ -69,7 +69,8 @@ export class BufferClient {
     if (instagram.length !== 1 || tiktok.length !== 1) throw new AppError('buffer_channels_ambiguous');
     // Support the current two-channel installation until the new setup completes.
     const channels: Channel[] = [instagram[0]!, tiktok[0]!];
-    if (this.env.EXPECTED_YOUTUBE_CHANNEL_ID) {
+    if (requireYoutube) {
+      if (!this.env.EXPECTED_YOUTUBE_CHANNEL_ID) throw new AppError('buffer_channel_selection_incomplete');
       const youtube = candidates.filter(c => c.service === 'youtube');
       if (youtube.length !== 1) throw new AppError('buffer_channels_ambiguous');
       channels.push(youtube[0]!);
@@ -80,7 +81,7 @@ export class BufferClient {
       if (!expected.every(Boolean)) throw new AppError('buffer_channel_selection_incomplete');
       if (channels[0]!.id !== expected[0] || channels[1]!.id !== expected[1] || channels[0]!.name.toLowerCase().replace(/^@/, '') !== expected[2]!.toLowerCase().replace(/^@/, '') || channels[1]!.name.toLowerCase().replace(/^@/, '') !== expected[3]!.toLowerCase().replace(/^@/, '')) throw new AppError('buffer_channel_identity_mismatch');
     }
-    if (this.env.EXPECTED_YOUTUBE_CHANNEL_ID && (!this.env.EXPECTED_YOUTUBE_USERNAME || channels[2]?.id !== this.env.EXPECTED_YOUTUBE_CHANNEL_ID || channels[2].name.toLowerCase().replace(/^@/, '') !== this.env.EXPECTED_YOUTUBE_USERNAME.toLowerCase().replace(/^@/, ''))) throw new AppError('buffer_channel_identity_mismatch');
+    if (requireYoutube && (!this.env.EXPECTED_YOUTUBE_USERNAME || channels[2]?.id !== this.env.EXPECTED_YOUTUBE_CHANNEL_ID || channels[2].name.toLowerCase().replace(/^@/, '') !== this.env.EXPECTED_YOUTUBE_USERNAME.toLowerCase().replace(/^@/, ''))) throw new AppError('buffer_channel_identity_mismatch');
     return channels;
   }
 
