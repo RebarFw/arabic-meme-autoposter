@@ -1,99 +1,97 @@
 # Arabic Meme Autoposter
 
-Private Arabic meme automation adapted from [RebarFw/meme-autoposter](https://github.com/RebarFw/meme-autoposter), reference commit `c0fe3820b0f7a27d741b3bbb615bc683a53ae276`. The English repository and its production resources are read-only references.
+AI maintainer guide for the Arabic Instagram-DM-to-social-posting Worker. Read this before changing the project. The code and configuration in this repository describe intended behavior; they do not by themselves prove what is currently deployed or connected in Meta, Buffer, or Cloudflare.
 
-## Accounts and resources
+## Purpose and boundaries
 
-- Instagram: `@avexiro0`, Buffer channel `6abea343ea19ca0bde46e40d`.
-- TikTok: `@avexiro0`, Buffer channel `6abebd37ea19ca0bde48a1b8`, explicitly confirmed by the user.
-- Worker: `arabic-meme-autoposter`.
-- Private R2: `arabic-meme-autoposter-media`, Standard storage, two-day lifecycle rule.
-- D1: `arabic-meme-autoposter-jobs`.
-- Cloudflare account: `maiklkarkoch51@gmail.com`, ID `7d7578de8373f18cc730837758c40395`. Deployment uses only this project's local token and pinned account; it never falls back to the global Wrangler login. Account IDs and URLs are in `wrangler.jsonc`; runtime credentials are Worker secrets.
+This Cloudflare Worker receives eligible content shared in a one-to-one Instagram DM to `@avexiro0`, downloads and validates the video, then publishes it through Buffer to the configured Instagram, TikTok, and YouTube channels. Scheduled polling means the owner's PC does not need to stay on.
 
-The Buffer API key exposes exactly this connected pair. Both IDs and usernames are pinned; ambiguous, incorrect, disconnected, locked or reminder-only channels fail closed. Before submitting each job, channel discovery rechecks the pair.
+Supported inputs are Instagram Reels/shared posts, direct video attachments, and one public TikTok video link sent through Instagram DM. The project does **not** read TikTok DMs. Only the two separately verified sender IDs stored as Worker secrets may create jobs. Sender names and message text are not authorization.
 
-## Publishing workflow
+The Arabic project has its own Cloudflare account, Worker, D1 database, R2 bucket, Meta credentials, Buffer key, and Apify budget. Do not copy secrets, account state, or production configuration from the English `meme-autoposter` project.
 
-An approved person shares a Reel in a separate 1-to-1 Instagram DM to the meme account. A minute cron polls the two exact sender-filtered conversations through Meta's Instagram Login API. It rechecks sender ID, recipient, timestamp and Reel format, commits permanent dedupe records, downloads a validated MP4 into private R2 and requests immediate automatic Buffer posts. It confirms both posts are `sent`, deletes the R2 object and revokes its temporary URL. The PC can be off.
+## Current implementation and rollout state
 
-The user approved publishing the Arabic Meta app on October 2, 2026. Signed live webhooks and minute polling now feed the same permanent message/job deduplication records. Webhooks preserve media that Meta may omit from subsequent message reads; polling remains the catch-up path. No App Review or group chat integration was performed.
+- The `main` branch includes three-channel Buffer delivery and migration `0005_youtube.sql`. The expected channel identities are pinned in `wrangler.jsonc`; Buffer discovery rejects missing, ambiguous, mismatched, disconnected, locked, or reminder-only channels.
+- YouTube posting uses the first non-empty line of the cleaned caption as the title, up to 100 characters, falling back to `Velo Shorts`. Category `23` is Comedy. YouTube decides whether the uploaded video qualifies as a Short based on the video itself.
+- The latest three-channel automated test uses a mocked Buffer API. It proves the code path and payload shape, not a real YouTube post.
+- Reviewed on 2026-11-16: GitHub Actions checks passed for the YouTube change. The repository's historical live evidence covers the prior Instagram/TikTok setup; a fresh three-channel production post has not been confirmed here. Treat production YouTube activation as **unverified** until the migration and Worker are deployed, `npm run setup` saves all three channels, and a new approved Reel reports `sent` for Instagram, TikTok, and YouTube in `npm run status`.
 
-Publishing resolved live DM visibility: the same installed receiver token immediately returned conversation data. Both separate setup DMs were read through Meta, and their two distinct sender IDs were securely installed. Polling is active. Two real Reels reached both @avexiro0 destinations with all four posts sent and both private R2 objects deleted. The first TikTok post required guarded recovery; the friend's second Reel completed automatically. Sharing the exact first Reel from the friend created no additional job or post. See [installation evidence](docs/testing.md).
+GitHub Actions in `.github/workflows/check.yml` runs checks and a dry build. It does not deploy to Cloudflare. Production deployment is an explicit operator command.
 
-### Two-person authorization
+## How a post moves through the system
 
-`@avexiro0` is the only connected Instagram account, DM receiver and Instagram posting destination; TikTok posting also targets `@avexiro0`. `@rebarfw` and Michel karkoush are DM senders only. The owner's DM proof succeeded without accepting a sender tester invitation. Sender enrollment never adds a Buffer channel or connects a sender as a posting account.
+1. A signed Meta Instagram webhook and the one-minute polling job can both discover the same message. Both go through the same parser and permanent deduplication logic.
+2. The Worker verifies the recipient, exact sender ID, message timestamp, supported media type, and source URL. It reserves one durable job. A Reel's canonical identity deduplicates it across both approved senders; message tombstones prevent replay.
+3. The downloader chain obtains the source video. The Worker validates the MP4 signature, MIME type, allowed host and redirects, maximum size, and complete streamed length before storing it in the private R2 bucket.
+4. D1 records one delivery reservation per configured social network. Buffer receives an immediate automatic video post for each channel. Existing successful deliveries are preserved if another channel fails.
+5. The Worker reconciles each Buffer post until it is actually `sent`. After all configured deliveries are sent, it deletes the private R2 object and revokes the temporary media URL.
 
-Only `OWNER_IG_SENDER_ID` and `FRIEND_IG_SENDER_ID` are allowed. **Publishing stays closed until both are installed and distinct.** Usernames and display names never authorize publishing.
+## Rules future changes must preserve
 
-The administrator issues a separate random, 15-minute DM challenge for each slot. `@rebarfw` sends the owner challenge; the friend identified as Michel karkoush sends the friend challenge from his own Instagram account. Only a signed Meta notification or authenticated Meta message read supplies the real sender ID. The importer requires the active challenge hash, a recent message and the correct recipient. An optional username adds a selection check; it cannot replace the DM proof. A self-chosen challenge, expired/replaced challenge, duplicate person or third slot is rejected.
+- **Authorization:** publishing remains closed unless both verified sender IDs are installed and distinct. A username, display name, or sender-provided text never substitutes for proof.
+- **No duplicates:** a Buffer create with a timeout or ambiguous response may already have succeeded. Never replay it automatically. Never recreate a delivery already confirmed as sent. Reconcile uncertain Buffer posts using the operator procedure in [operations](docs/operations.md).
+- **Separate delivery state:** Instagram, TikTok, and YouTube can have different outcomes. Do not mark the entire job sent based only on Buffer accepting a create; require each configured post to reach `sent`.
+- **Captions:** keep the original Reel caption/title and its whitespace and hashtags, removing @mentions as implemented. Do not generate, translate, append, or substitute sender DM text. An explicitly empty caption remains empty; the configured empty-caption fallback only permits a validated video when source caption retrieval fails.
+- **Media and privacy:** keep source videos in private R2, use short-lived URLs, validate every download and redirect, and delete media after delivery. Never log or return access tokens, raw DM contents, signed media URLs, or credentials.
+- **External accounts and cost:** deployment must stay pinned to the Arabic Cloudflare account. Keep Apify on its verified Free plan and preserve its durable budget guard. Do not upgrade subscriptions, enable overage, or bypass quota checks.
+- **Change evidence:** mocked tests and green CI are not proof of live Buffer/Meta behavior. State clearly whether a claim is code support, CI evidence, dashboard configuration, or a real production post.
 
-The authenticated installer sends the verified ID to Wrangler stdin as the matching Worker secret and deletes the temporary proof after the deployment confirms it. Normal status output shows booleans/counts and omits sender IDs. Polling history starts when both identities are installed.
+## Code map
 
-### Dedupe policy
+| Path | Responsibility |
+|---|---|
+| `src/index.ts` | Worker fetch/cron entry points, protected admin routes, Meta webhook handling, setup and status responses. |
+| `src/instagram-polling.ts`, `src/meta.ts`, `src/senders.ts`, `src/owner-setup.ts` | Meta polling/webhooks, message parsing and sender enrollment/authorization. |
+| `src/jobs.ts` | Durable jobs, deduplication, download and delivery state, per-channel reservations, reconciliation, and cleanup. |
+| `src/downloaders.ts`, `src/video-downloader.ts`, `src/downloader-providers/` | Source selection, provider fallbacks, download streaming, and validation inputs. |
+| `src/apify-download.ts`, `src/apify-budget.ts` | Optional Apify download and Free-plan spend/run controls. |
+| `src/buffer.ts` | Buffer channel discovery and immediate post creation/status queries, including YouTube metadata. |
+| `src/media.ts`, `src/security.ts`, `src/caption.ts` | Private R2 media lifecycle, URL/hash/video security, and caption cleaning. |
+| `src/cloudflare-usage.ts`, `src/cloudflare-probe.ts` | Cloudflare quota measurement, conservative capacity guard, reservations, and explicit probe. |
+| `src/privacy.ts`, `src/types.ts` | Public privacy/deletion information and shared types/error codes. |
+| `migrations/` | D1 schema evolution. `0005_youtube.sql` safely widens per-job deliveries to include YouTube while preserving existing rows. |
+| `scripts/` | Local operator commands for deployment, secrets, setup, status, diagnosis, and guarded recovery. |
+| `tests/`, `.github/workflows/check.yml` | Worker-runtime and deployment-safety tests; CI lint, typecheck, tests, and dry build. |
 
-A canonical Reel shortcode (or stable Meta media ID when no permalink is available) can create **one permanent job across both senders**, including later DMs. Message hashes are also permanent tombstones. Removing private source contents never removes these records. When Meta exposes neither a permalink nor a stable media ID, message-level dedupe still prevents repeated delivery of that DM; identity across different attachment-only DMs cannot be guaranteed.
+## Deployment and verification
 
-Each social-network delivery is reserved atomically before its Buffer mutation. A crash, timeout or ambiguous response never automatically repeats that external create. A successful network is never resubmitted after another network fails. Uncertain creates require operator reconciliation; this favors avoiding duplicate posts over blindly retrying.
-
-### Polling and downloaders
-
-An approved sender can also upload a video directly in a DM. Only verified MP4 media from trusted Meta hosts is accepted; these uploads have an empty caption, and sender DM text is never copied. Original Reel captions keep the existing preservation rules. The same video size and cost limits apply.
-
-If Meta returns an approved message without text, a share or an attachment, polling keeps it pending and retries with increasing delays instead of permanently marking it seen. New messages take priority. At most 16 detail reads are made within the original 48-hour window; status exposes `mediaPending`, `mediaNeedsAttention` and `meta_media_unavailable`. Missing media is never guessed. If both push and polling omit the media, the sender must provide a public Reel URL or upload the video itself.
-
-On October 25, 2026, the operator explicitly enabled `ALLOW_EMPTY_CAPTION_FALLBACK=true`: original captions are preserved whenever a provider returns them, but a validated video can now post with an empty caption when the caption cannot be retrieved. Caption-capable providers run before a bare attachment recovery. No generated text or sender DM text is substituted.
-
-Both people share one D1 state row, lease, backoff and bounded hash cache. Quiet runs make four small Meta GETs total. At most three unseen message details per conversation and six per run are read, with the first sender alternating for fairness. Message history is bounded to Meta's latest 20 messages and 48 hours; high-volume bursts beyond that window are not guaranteed recoverable.
-
-The full reference downloader chain is retained: Meta attachment, authorized Meta Graph media, public Reel metadata, optional generic API, Apify Instagram Reel Scraper, VideoDropper, FastDL, SaveFrom and SnapInsta. Free direct providers run first. Apify precedes the unreliable website fallbacks as in the working project. No CAPTCHA solving, remote JavaScript execution, cookies or account credentials are sent to websites. The optional local VideoDropper recovery tool remains available for an existing approved job only.
-
-MP4 signature, MIME, byte limits, trusted hosts, redirect destinations and full streamed length are validated. Both destinations receive the original Reel caption/title with every @mention removed. All remaining text, punctuation, whitespace, line breaks and hashtags are preserved; nothing is generated, translated, trimmed, truncated or appended. Caption metadata comes from the media provider or the share's title, never from the sender's DM text or an Open Graph description. An explicitly empty source caption stays empty. With the operator-enabled empty-caption fallback, a validated video can publish without a caption when its original text is unavailable. No caption is invented.
-
-
-### TikTok video links through Instagram DMs
-
-The **same two approved Instagram DM senders** can now send a public TikTok video link (full `https://www.tiktok.com/@creator/video/...` or short `https://vt.tiktok.com/...` / `https://vm.tiktok.com/...`). The Worker accepts one video link per message, keeps the existing sender/recipient checks and permanent dedupe, and sends the validated MP4 to **both** existing Buffer channels. The original TikTok title/caption is used, with the existing @mention removal; sender DM text is not copied. Instagram Reels and direct Instagram video uploads continue to work.
-
-The Worker reads the video ID and H.264 file checksums from TikTok's public page. If TikTok's CDN is unavailable, it downloads one video with the Apify TikTok Actor under the existing free-credit guard. The file must match a checksum from TikTok before the Worker creates either post.
-
-**This does not read TikTok DMs.** Direct TikTok inbox ingestion requires access to TikTok's restricted Business Messaging API and is not part of this change. This source uses Instagram DM only. Changes must be deployed to the existing Cloudflare Worker before they affect live DMs.
-
-## Cost controls
-
-Cloudflare automation pauses at **90%** of the Workers Free/D1 Free/R2 Standard allowances, with account-wide analytics and atomic R2 reservations. Missing, partial or stale analytics fail closed. Health and protected status routes remain available during an application pause. Known-object deletion and independent R2 lifecycle expiry support cleanup. The app never upgrades a Cloudflare subscription. Analytics is delayed and sampled; this is a conservative application guard, not an account billing cap against unrelated usage or sudden bursts. See [Cloudflare limits and boundaries](docs/cloudflare-usage.md).
-
-A newly created database can be absent from storage analytics. The manual `cloudflare:bootstrap` command can initialize one normal 60-second cache window using fresh account analytics, direct database-size measurements and a verified empty bucket. It requires this account to contain only the Arabic Worker/database/bucket, zero jobs/deliveries/reservations, complete analytics and safe usage. It adds conservative margins, preserves latched stops and never uploads the deployment token. After that window, missing storage analytics pauses automation again. This command is for initial enrollment and probes; it is not an automatic replacement for normal monitoring.
-
-Apify requires a verified FREE plan, zero base price, $5 free credits and an account usage cap no greater than $5. Its limit is **500 reserved runs per billing cycle**, with a $0.0073 per-run ceiling and $0.50 safety margin. Delayed usage plus worst-case reservations may stop it before 500 runs. Stops persist until a verified new cycle; token rotation and redeployment do not clear them. The guard never raises a smaller account cap or upgrades a plan.
-
-## Local commands
-
-Use Node.js 24. Secrets and diagnostics are ignored before any project files are staged.
+Use Node.js 24. The deployment token and runtime credentials belong in ignored local `.secrets/` files; never paste them into chat or commit them.
 
 ```powershell
 npm ci
 npm run check
 npm run deploy
-npm run secrets:install
 npm run setup
-npm run owner:start -- owner
-npm run owner:start -- friend
-npm run owner:import -- owner rebarfw SETUP_DM_CODE
-npm run owner:import -- friend FRIEND_USERNAME SETUP_DM_CODE
-npm run owner:finish -- owner
-npm run owner:finish -- friend
 npm run status
-npm run polling:validate
-npm run cloudflare:validate
-npm run apify:budget
 ```
 
-If one network rejects a create while the other is already sent, see the guarded `retry:delivery` command in [operations](docs/operations.md). It preserves the successful post and refuses uncertain submissions.
+`npm run deploy` is project-pinned, applies remote D1 migrations before deploying, installs non-empty runtime secrets, and verifies the deployment. `npm run setup` then rediscovers the Buffer channels and saves the verified configuration in D1; it also checks the Meta/Instagram account relationship and performs the configured Meta subscription. With YouTube expected in `wrangler.jsonc`, setup must discover exactly the pinned Instagram, TikTok, and YouTube channels or fail closed.
 
-The `.secrets/` filenames are `buffer-api-key.txt`, `apify-token.txt`, `cloudflare-usage-token.txt`, `meta-access-token.txt`, and `meta-app-secret.txt`. A separate local `cloudflare-deploy-token.txt` can grant Workers Scripts Edit, Workers R2 Storage Edit, D1 Edit and Account Settings Read for the pinned account. This deployment credential is never uploaded to the Worker; its runtime analytics reader remains separate. Deployment creates project-specific `admin-token` and `meta-verify-token`. The installer uploads only nonempty runtime secret files through Wrangler stdin and prints names only. Leave the local operator tokens available for diagnostics and Meta verification; remove source credentials only after secure installation is confirmed and recovery is assured.
+For YouTube activation, run the checks, deploy, run setup, then send one **new, approved** Reel and verify three `sent` delivery records with `npm run status`. The setup command is essential: until D1 stores the three-channel list, new jobs can still use the previous two-channel configuration. Do not use a real public post as a test unless the owner has approved it.
 
-Deployment checks resource names and the explicitly confirmed Arabic account, creates/reuses only the Arabic resources, rejects public R2 domains, installs lifecycle expiry, applies migrations, deploys and verifies the actual URL. It never reads the English project's credentials. GitHub Actions repeats lint, typechecking, deployment authentication tests, Worker-runtime tests and a dry build without production secrets.
+Useful read-only or guarded checks:
 
-Current installation and real-test evidence: [testing](docs/testing.md). External Meta steps: [deployment](docs/deployment.md).
+- `npm run polling:validate` — validate polling access and recent media visibility.
+- `npm run cloudflare:validate` and `npm run cloudflare:usage` — inspect the Cloudflare guard.
+- `npm run apify:budget` — inspect Apify budget state without starting an Actor.
+- `npm run meta:diagnose` — inspect protected Meta connectivity.
+- `npm run status` — inspect recent jobs and per-channel outcomes.
+
+## Detailed references
+
+- [YouTube activation and three-channel behavior](docs/youtube-rollout.md)
+- [Deployment and Meta setup](docs/deployment.md)
+- [Operational recovery and uncertain Buffer posts](docs/operations.md)
+- [Tests and historical installation evidence](docs/testing.md)
+- [Cloudflare quota guard and limitations](docs/cloudflare-usage.md)
+- [Verified external API contracts](docs/api-contracts.md)
+- [Downloader recovery](docs/website-downloaders.md)
+
+## Instructions for future AI maintainers
+
+1. Start with this README, then read the relevant source files and detailed reference docs before editing. Source code and live diagnostics take precedence over an old prose claim.
+2. Preserve the security, deduplication, per-network delivery, privacy, and budget rules above. Prefer narrow changes and keep the English project and its production resources untouched.
+3. After any change to behavior, supported input, channel setup, configuration, deployment, recovery, or verified production state, update this README in the same change. Update the detailed runbook or tests too when their instructions or coverage change.
+4. Keep the status section honest and dated when it contains a time-sensitive claim. Separate code support from passing tests and from live deployment/post evidence. Never infer a production change from a commit or mocked test.
+5. Never put secrets, DM contents, signed media URLs, or unnecessary personal/account data in this file, logs, commits, or responses.
