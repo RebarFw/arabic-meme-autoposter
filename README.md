@@ -15,9 +15,9 @@ The Arabic project has its own Cloudflare account, Worker, D1 database, R2 bucke
 - The `main` branch includes three-channel Buffer delivery and migration `0005_youtube.sql`. The expected channel identities are pinned in `wrangler.jsonc`; Buffer discovery rejects missing, ambiguous, mismatched, disconnected, locked, or reminder-only channels.
 - YouTube posting uses the first non-empty line of the cleaned caption as the title, up to 100 characters, falling back to `Velo Shorts`. Category `23` is Comedy. YouTube decides whether the uploaded video qualifies as a Short based on the video itself.
 - The latest three-channel automated test uses a mocked Buffer API. It proves the code path and payload shape, not a real YouTube post.
-- Reviewed on 2026-11-16: GitHub Actions checks passed for the YouTube change. The repository's historical live evidence covers the prior Instagram/TikTok setup; a fresh three-channel production post has not been confirmed here. Treat production YouTube activation as **unverified** until the migration and Worker are deployed, `npm run setup` saves all three channels, and a new approved Reel reports `sent` for Instagram, TikTok, and YouTube in `npm run status`.
+- Production rollout on 2026-11-16: D1 migration `0005_youtube.sql` has been applied and recorded in `d1_migrations`, preserving existing delivery rows. Cloudflare Workers Builds is connected to `main` and uses `npx wrangler deploy`; confirm the first build is active in Cloudflare before claiming the new code is live. D1 `settings.channels` still has only Instagram and TikTok until setup saves all three. Production YouTube activation remains **unverified** until deployment is active, setup saves YouTube, and a new approved Reel reports `sent` for all three destinations. No public test post has been sent.
 
-GitHub Actions in `.github/workflows/check.yml` runs checks and a dry build. It does not deploy to Cloudflare. Production deployment is an explicit operator command.
+GitHub Actions in `.github/workflows/check.yml` runs checks and a dry build; it does not deploy. Cloudflare Workers Builds is connected to this repository's `main` branch with production deploy command `npx wrangler deploy`. A push to `main` triggers production deployment. This build path does **not** apply D1 migrations, install runtime secrets, or run `npm run setup`; a green build alone does not mean YouTube is active.
 
 ## How a post moves through the system
 
@@ -66,7 +66,7 @@ npm run setup
 npm run status
 ```
 
-`npm run deploy` is project-pinned, applies remote D1 migrations before deploying, installs non-empty runtime secrets, and verifies the deployment. `npm run setup` then rediscovers the Buffer channels and saves the verified configuration in D1; it also checks the Meta/Instagram account relationship and performs the configured Meta subscription. With YouTube expected in `wrangler.jsonc`, setup must discover exactly the pinned Instagram, TikTok, and YouTube channels or fail closed.
+`npm run deploy` is the local, project-pinned deployment path: it applies remote D1 migrations before deploying, installs non-empty runtime secrets, and verifies the deployment. Cloudflare Workers Builds currently runs only `npx wrangler deploy`; it does not run migrations, install runtime secrets, or setup. Before a future code change that depends on a new migration, apply the D1 migration before the code reaches the production build. `npm run setup` then rediscovers the Buffer channels and saves the verified configuration in D1; it also checks the Meta/Instagram account relationship and performs the configured Meta subscription. With YouTube expected in `wrangler.jsonc`, setup must discover exactly the pinned Instagram, TikTok, and YouTube channels or fail closed.
 
 For YouTube activation, run the checks, deploy, run setup, then send one **new, approved** Reel and verify three `sent` delivery records with `npm run status`. The setup command is essential: until D1 stores the three-channel list, new jobs can still use the previous two-channel configuration. Do not use a real public post as a test unless the owner has approved it.
 
