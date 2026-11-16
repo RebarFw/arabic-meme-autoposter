@@ -95,13 +95,13 @@ async function admin(request: Request, env: Env, path: string): Promise<Response
   if (path === '/admin/apify/enforce-limit' && request.method === 'POST') return json(await apifyBudgetStatus(env, true));
   if (path === '/admin/meta/subscribe' && request.method === 'POST') return json(await diagnoseMeta(env, true));
   if (path === '/admin/setup' && request.method === 'POST') {
-    const channels = await new BufferClient(env).discoverChannels();
-    let recipients = [channels[0].serviceId];
+    const channels = await new BufferClient(env).discoverChannels(!!env.EXPECTED_YOUTUBE_CHANNEL_ID);
+    let recipients = [channels[0]!.serviceId];
     if (env.META_ACCESS_TOKEN) {
       const me = await metaRequest<{ id?: string; user_id?: string; username?: string }>(env, 'me?fields=id,user_id,username');
-      if (!me.username || me.username.toLowerCase().replace(/^@/, '') !== channels[0].name.toLowerCase().replace(/^@/, '')) throw new AppError('meta_buffer_account_mismatch');
-      if (![me.id, me.user_id].includes(channels[0].serviceId)) throw new AppError('meta_buffer_account_id_mismatch');
-      recipients = [...new Set([me.user_id, me.id, channels[0].serviceId].filter((id): id is string => !!id))];
+      if (!me.username || me.username.toLowerCase().replace(/^@/, '') !== channels[0]!.name.toLowerCase().replace(/^@/, '')) throw new AppError('meta_buffer_account_mismatch');
+      if (![me.id, me.user_id].includes(channels[0]!.serviceId)) throw new AppError('meta_buffer_account_id_mismatch');
+      recipients = [...new Set([me.user_id, me.id, channels[0]!.serviceId].filter((id): id is string => !!id))];
     }
     if (recipients.some(id => !/^\d+$/.test(id))) throw new AppError('invalid_instagram_account_id');
     await saveSetting(env, 'channels', channels);

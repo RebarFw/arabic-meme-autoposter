@@ -183,6 +183,39 @@ describe('persistent jobs and media', () => {
       fetcher.mockRestore();
     }
   });
+  it('delivers a new approved Reel to Instagram, TikTok and YouTube without duplicates', async () => {
+    const three: Channel[] = [...channels, { id: 'yt-channel', service: 'youtube', name: 'Velo', serviceId: '444', organizationId: 'org', isLocked: false, isDisconnected: false }];
+    await saveSetting(env, 'channels', three);
+    const bindings: Env = { ...configured(), EXPECTED_INSTAGRAM_CHANNEL_ID: 'ig-channel', EXPECTED_TIKTOK_CHANNEL_ID: 'tt-channel', EXPECTED_YOUTUBE_CHANNEL_ID: 'yt-channel', EXPECTED_INSTAGRAM_USERNAME: 'memes', EXPECTED_TIKTOK_USERNAME: 'memes', EXPECTED_YOUTUBE_USERNAME: 'Velo' };
+    const creates: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      if (String(input).includes('fbsbx.com')) return new Response(mp4, { headers: { 'Content-Type': 'video/mp4', 'Content-Length': String(mp4.length) } });
+      const body = JSON.parse(String(init?.body));
+      if (body.query.includes('organizations')) return Response.json({ data: { account: { organizations: [{ id: 'org' }] } } });
+      if (body.query.includes('query Channels')) return Response.json({ data: { channels: three } });
+      if (body.query.includes('mutation')) {
+        const request = body.variables.input;
+        expect(request.schedulingType).toBe('automatic');
+        expect(request.mode).toBe('shareNow');
+        if (request.channelId === 'yt-channel') expect(request.metadata.youtube).toMatchObject({ title: 'Original', categoryId: '23' });
+        if (request.channelId === 'ig-channel') expect(request.metadata.instagram.type).toBe('reel');
+        if (request.channelId === 'tt-channel') expect(request.metadata).toBeUndefined();
+        creates.push(request.channelId);
+        return Response.json({ data: { createPost: { __typename: 'PostActionSuccess', post: { id: 'p' + creates.length, status: 'sent', schedulingType: 'automatic' } } } });
+      }
+      throw new Error('unexpected request');
+    });
+    const id = await enqueue(bindings, source());
+    await processJob(bindings, id);
+    await env.DB.prepare('UPDATE jobs SET next_run_at=0 WHERE id=?').bind(id).run();
+    await processJob(bindings, id);
+    expect(creates).toEqual(['ig-channel','tt-channel','yt-channel']);
+    expect((await rows()).map(r => r.service).sort()).toEqual(['instagram','tiktok','youtube']);
+    expect((await job(id)).state).toBe('completed');
+    expect(await enqueue(bindings, source())).toBe(id);
+    await processJob(bindings, id);
+    expect(creates).toHaveLength(3);
+  });
   it('publishes both channels with shareNow only once despite duplicate webhook deliveries', async () => {
     let creates = 0;
     const fetcher = vi.spyOn(globalThis,'fetch').mockImplementation(async (input, init) => {
@@ -291,7 +324,7 @@ describe('Buffer discovery', () => {
       const body = JSON.parse(String(init?.body));
       return body.query.includes('account') ? Response.json({data:{account:{organizations:[{id:'org'}]}}}) : Response.json({data:{channels}});
     });
-    const response = await call('/admin/setup',{method:'POST',headers:{Authorization:'Bearer test-admin'}},{...configured(),META_ACCESS_TOKEN:'fake-meta'});
+    const response = await call('/admin/setup',{method:'POST',headers:{Authorization:'Bearer test-admin'}},{...configured(),META_ACCESS_TOKEN:'fake-meta',EXPECTED_YOUTUBE_CHANNEL_ID:undefined});
     expect(response.status).toBe(200);
     expect((await response.json() as {metaSubscribed:boolean}).metaSubscribed).toBe(true);
     expect(fetcher).toHaveBeenCalledTimes(4);

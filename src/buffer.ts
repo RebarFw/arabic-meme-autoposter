@@ -24,6 +24,12 @@ export const CREATE_POST = `mutation PublishReel($input: CreatePostInput!) {
   }
 }`;
 
+// YouTube requires a title of at most 100 characters, separate from the caption.
+function youtubeTitle(caption: string): string {
+  const first = caption.split(/\r?\n/).map(line => line.trim()).find(Boolean);
+  return Array.from(first || 'Velo Shorts').slice(0, 100).join('').trim() || 'Velo Shorts';
+}
+
 export class BufferClient {
   constructor(private env: Env) {}
 
@@ -49,36 +55,45 @@ export class BufferClient {
     return result.data;
   }
 
-  async discoverChannels(): Promise<[Channel, Channel]> {
+  async discoverChannels(requireYoutube = false): Promise<Channel[]> {
     const account = await this.query<{ account: { organizations: { id: string }[] } }>('query { account { organizations { id } } }');
     const candidates: Channel[] = [];
     for (const org of account.account.organizations.slice(0, 10)) {
       const result = await this.query<{ channels: Channel[] }>(`query Channels($input: ChannelsInput!) {
         channels(input: $input) { id name service serviceId organizationId isDisconnected isLocked metadata { ... on TiktokMetadata { defaultToReminders } } }
       }`, { input: { organizationId: org.id } });
-      candidates.push(...result.channels.filter(c => ['instagram','tiktok'].includes(c.service)));
+      candidates.push(...result.channels.filter(c => ['instagram','tiktok','youtube'].includes(c.service)));
     }
     const instagram = candidates.filter(c => c.service === 'instagram');
     const tiktok = candidates.filter(c => c.service === 'tiktok');
     if (instagram.length !== 1 || tiktok.length !== 1) throw new AppError('buffer_channels_ambiguous');
-    const pair: [Channel, Channel] = [instagram[0]!, tiktok[0]!];
-    if (pair.some(c => c.isDisconnected || c.isLocked || c.metadata?.defaultToReminders)) throw new AppError('buffer_channel_not_automatic');
+    // Support the current two-channel installation until the new setup completes.
+    const channels: Channel[] = [instagram[0]!, tiktok[0]!];
+    if (requireYoutube) {
+      if (!this.env.EXPECTED_YOUTUBE_CHANNEL_ID) throw new AppError('buffer_channel_selection_incomplete');
+      const youtube = candidates.filter(c => c.service === 'youtube');
+      if (youtube.length !== 1) throw new AppError('buffer_channels_ambiguous');
+      channels.push(youtube[0]!);
+    }
+    if (channels.some(c => c.isDisconnected || c.isLocked || c.metadata?.defaultToReminders)) throw new AppError('buffer_channel_not_automatic');
     const expected = [this.env.EXPECTED_INSTAGRAM_CHANNEL_ID, this.env.EXPECTED_TIKTOK_CHANNEL_ID, this.env.EXPECTED_INSTAGRAM_USERNAME, this.env.EXPECTED_TIKTOK_USERNAME];
     if (expected.some(Boolean)) {
       if (!expected.every(Boolean)) throw new AppError('buffer_channel_selection_incomplete');
-      if (pair[0].id !== expected[0] || pair[1].id !== expected[1] || pair[0].name.toLowerCase().replace(/^@/, '') !== expected[2]!.toLowerCase().replace(/^@/, '') || pair[1].name.toLowerCase().replace(/^@/, '') !== expected[3]!.toLowerCase().replace(/^@/, '')) throw new AppError('buffer_channel_identity_mismatch');
+      if (channels[0]!.id !== expected[0] || channels[1]!.id !== expected[1] || channels[0]!.name.toLowerCase().replace(/^@/, '') !== expected[2]!.toLowerCase().replace(/^@/, '') || channels[1]!.name.toLowerCase().replace(/^@/, '') !== expected[3]!.toLowerCase().replace(/^@/, '')) throw new AppError('buffer_channel_identity_mismatch');
     }
-    return pair;
+    if (requireYoutube && (!this.env.EXPECTED_YOUTUBE_USERNAME || channels[2]?.id !== this.env.EXPECTED_YOUTUBE_CHANNEL_ID || channels[2]!.name.toLowerCase().replace(/^@/, '') !== this.env.EXPECTED_YOUTUBE_USERNAME.toLowerCase().replace(/^@/, ''))) throw new AppError('buffer_channel_identity_mismatch');
+    return channels;
   }
 
   async publish(channelId: string, service: string, caption: string, mediaUrl: string): Promise<BufferPost> {
-    const expected = service === 'instagram' ? this.env.EXPECTED_INSTAGRAM_CHANNEL_ID : service === 'tiktok' ? this.env.EXPECTED_TIKTOK_CHANNEL_ID : undefined;
-    if (!['instagram', 'tiktok'].includes(service) || expected && channelId !== expected) throw new AppError('buffer_channel_identity_mismatch');
+    const expected = service === 'instagram' ? this.env.EXPECTED_INSTAGRAM_CHANNEL_ID : service === 'tiktok' ? this.env.EXPECTED_TIKTOK_CHANNEL_ID : service === 'youtube' ? this.env.EXPECTED_YOUTUBE_CHANNEL_ID : undefined;
+    if (!['instagram', 'tiktok', 'youtube'].includes(service) || expected && channelId !== expected) throw new AppError('buffer_channel_identity_mismatch');
     const input = {
       channelId, text: caption, schedulingType: 'automatic', mode: 'shareNow',
       needsApproval: false, saveToDraft: false, source: 'arabic-meme-autoposter',
       assets: [{ video: { url: mediaUrl } }],
-      ...(service === 'instagram' ? { metadata: { instagram: { type: 'reel', shouldShareToFeed: true } } } : {}),
+      ...(service === 'instagram' ? { metadata: { instagram: { type: 'reel', shouldShareToFeed: true } } } :
+        service === 'youtube' ? { metadata: { youtube: { title: youtubeTitle(caption), categoryId: '23' } } } : {}),
     };
     const result = await this.query<{ createPost: { __typename: string; post?: BufferPost; message?: string } }>(CREATE_POST, { input }, true);
     if (['InvalidInputError','UnauthorizedError','NotFoundError','LimitReachedError'].includes(result.createPost.__typename)) throw new AppError(rejectionCode(result.createPost.__typename, result.createPost.message));
