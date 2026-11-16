@@ -324,7 +324,7 @@ describe('Buffer discovery', () => {
       const body = JSON.parse(String(init?.body));
       return body.query.includes('account') ? Response.json({data:{account:{organizations:[{id:'org'}]}}}) : Response.json({data:{channels}});
     });
-    const response = await call('/admin/setup',{method:'POST',headers:{Authorization:'Bearer test-admin'}},{...configured(),META_ACCESS_TOKEN:'fake-meta'});
+    const response = await call('/admin/setup',{method:'POST',headers:{Authorization:'Bearer test-admin'}},{...configured(),META_ACCESS_TOKEN:'fake-meta',EXPECTED_YOUTUBE_CHANNEL_ID:undefined});
     expect(response.status).toBe(200);
     expect((await response.json() as {metaSubscribed:boolean}).metaSubscribed).toBe(true);
     expect(fetcher).toHaveBeenCalledTimes(4);
