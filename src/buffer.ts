@@ -81,7 +81,7 @@ export class BufferClient {
       if (!expected.every(Boolean)) throw new AppError('buffer_channel_selection_incomplete');
       if (channels[0]!.id !== expected[0] || channels[1]!.id !== expected[1] || channels[0]!.name.toLowerCase().replace(/^@/, '') !== expected[2]!.toLowerCase().replace(/^@/, '') || channels[1]!.name.toLowerCase().replace(/^@/, '') !== expected[3]!.toLowerCase().replace(/^@/, '')) throw new AppError('buffer_channel_identity_mismatch');
     }
-    if (requireYoutube && (!this.env.EXPECTED_YOUTUBE_USERNAME || channels[2]?.id !== this.env.EXPECTED_YOUTUBE_CHANNEL_ID || channels[2].name.toLowerCase().replace(/^@/, '') !== this.env.EXPECTED_YOUTUBE_USERNAME.toLowerCase().replace(/^@/, ''))) throw new AppError('buffer_channel_identity_mismatch');
+    if (requireYoutube && (!this.env.EXPECTED_YOUTUBE_USERNAME || channels[2]?.id !== this.env.EXPECTED_YOUTUBE_CHANNEL_ID || channels[2]!.name.toLowerCase().replace(/^@/, '') !== this.env.EXPECTED_YOUTUBE_USERNAME.toLowerCase().replace(/^@/, ''))) throw new AppError('buffer_channel_identity_mismatch');
     return channels;
   }
 
