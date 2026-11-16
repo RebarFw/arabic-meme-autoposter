@@ -166,7 +166,7 @@ async function publish(env: Env, job: Job, maxDeliveries = 2): Promise<void> {
   const caption = withoutMentions(job.caption);
   if (!job.object_key || !job.media_expires_at || job.media_expires_at <= Date.now() || !await env.MEDIA.head(job.object_key)) throw new AppError('media_missing_or_expired');
   const client = new BufferClient(env);
-  if (env.EXPECTED_INSTAGRAM_CHANNEL_ID || env.EXPECTED_TIKTOK_CHANNEL_ID || env.EXPECTED_YOUTUBE_CHANNEL_ID) await client.discoverChannels();
+  if (env.EXPECTED_INSTAGRAM_CHANNEL_ID || env.EXPECTED_TIKTOK_CHANNEL_ID || env.EXPECTED_YOUTUBE_CHANNEL_ID) await client.discoverChannels((await settings<Channel[]>(env, 'channels'))?.length === 3);
   let submitted = 0;
   for (const delivery of await deliveries(env, job.id)) {
     if (delivery.state !== 'pending') continue;
